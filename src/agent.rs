@@ -83,25 +83,18 @@ impl Agent {
                     None
                 };
                 
-                if let Some(hashes) = chunk_hashes {
-                    // Chunked upload: create and upload manifest
-                    let manifest = Manifest::new(
-                        file_size,
-                        config.chunk_size,
-                        hashes,
-                        file_path.file_name().and_then(|n| n.to_str()).map(String::from),
-                        None,
-                        Some(config.server_url.clone()),
-                    ).context("Failed to create manifest")?;
+                if chunk_hashes.is_some() {
+                    // Chunked upload complete — chunks are on the server.
+                    // Now upload the complete file so it's retrievable by OID.
+                    let data = tokio::fs::read(&file_path).await
+                        .context("Failed to read file")?;
+                    let hash = hash_data(&data);
 
-                    let manifest_json = manifest.to_json()
-                        .context("Failed to serialize manifest")?;
-                    let manifest_data = manifest_json.into_bytes();
-                    let manifest_hash = hash_data(&manifest_data);
-
-                    let auth_token = create_auth_token(&config, ActionType::Upload, Some(&manifest_hash))?;
-                    client.upload_blob(manifest_data, &manifest_hash, Some("application/json"), Some(&auth_token))
+                    let auth_token = create_auth_token(&config, ActionType::Upload, Some(&hash))?;
+                    client.upload_blob(data, &hash, None, Some(&auth_token))
                         .await?;
+
+                    send_progress(&sender, &oid, file_size as usize, file_size as usize, file_size as usize).await;
                 } else {
                     // Single blob upload: upload raw data directly under its hash (= OID)
                     let data = tokio::fs::read(&file_path).await
@@ -109,10 +102,10 @@ impl Agent {
                     let hash = hash_data(&data);
 
                     let auth_token = create_auth_token(&config, ActionType::Upload, Some(&hash))?;
-                    client.upload_blob(data.clone(), &hash, None, Some(&auth_token))
+                    client.upload_blob(data, &hash, None, Some(&auth_token))
                         .await?;
 
-                    send_progress(&sender, &oid, data.len(), data.len(), data.len()).await;
+                    send_progress(&sender, &oid, file_size as usize, file_size as usize, file_size as usize).await;
                 }
 
                 Ok(None)

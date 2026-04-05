@@ -36,30 +36,28 @@ impl Chunker {
         let mut offset = 0u64;
         let mut index = 0;
         
+        let mut remaining = file_size;
         loop {
-            let mut buffer = vec![0u8; self.chunk_size];
-            let bytes_read = file.read(&mut buffer).await?;
-            
-            if bytes_read == 0 {
+            if remaining == 0 {
                 break;
             }
-            
-            let actual_data = &buffer[..bytes_read];
-            let hash = self.hash_chunk(actual_data);
-            
+
+            let to_read = std::cmp::min(self.chunk_size as u64, remaining) as usize;
+            let mut buffer = vec![0u8; to_read];
+            file.read_exact(&mut buffer).await?;
+
+            let hash = self.hash_chunk(&buffer);
+
             chunks.push(Chunk {
                 index,
                 offset,
-                size: bytes_read,
+                size: to_read,
                 hash,
             });
-            
-            offset += bytes_read as u64;
+
+            offset += to_read as u64;
+            remaining -= to_read as u64;
             index += 1;
-            
-            if bytes_read < self.chunk_size {
-                break;
-            }
         }
         
         Ok((chunks, file_size))
