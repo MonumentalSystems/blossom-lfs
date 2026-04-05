@@ -1,7 +1,7 @@
 pub mod chunker;
-pub mod merkle;
 pub mod manifest;
+pub mod merkle;
 
-pub use chunker::{Chunker, Chunk, ChunkAssembler};
-pub use merkle::{MerkleTree, MerkleProof, verify_merkle_root};
-pub use manifest::{Manifest, ChunkInfo};
+pub use chunker::{Chunk, ChunkAssembler, Chunker};
+pub use manifest::{ChunkInfo, Manifest};
+pub use merkle::{verify_merkle_root, MerkleProof, MerkleTree};

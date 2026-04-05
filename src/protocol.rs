@@ -58,7 +58,12 @@ pub struct ProgressResponse {
 }
 
 impl ProgressResponse {
-    pub fn new(oid: String, bytes_so_far: usize, total_bytes: usize, bytes_since_last: usize) -> Self {
+    pub fn new(
+        oid: String,
+        bytes_so_far: usize,
+        total_bytes: usize,
+        bytes_since_last: usize,
+    ) -> Self {
         Self {
             event: String::from("progress"),
             oid,

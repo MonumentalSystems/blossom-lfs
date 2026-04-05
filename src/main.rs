@@ -21,7 +21,7 @@ struct Cli {
 
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    
+
     if let Some(log_output) = cli.log_output {
         simplelog::WriteLogger::init(
             cli.log_level.to_level_filter(),
@@ -39,7 +39,7 @@ async fn run() -> anyhow::Result<()> {
             simplelog::ColorChoice::Auto,
         )?;
     }
-    
+
     if cli.config_info {
         println!("Blossom LFS Configuration:");
         println!("  Set in .lfsdalconfig or .git/config:");
@@ -55,14 +55,14 @@ async fn run() -> anyhow::Result<()> {
         println!("    NOSTR_PRIVATE_KEY = <nostr_private_key>");
         return Ok(());
     }
-    
+
     let config = Config::from_git_config()
         .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
-    
+
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
-    let mut agent = Agent::new(config, tx)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize agent: {}", e))?;
-    
+    let mut agent =
+        Agent::new(config, tx).map_err(|e| anyhow::anyhow!("Failed to initialize agent: {}", e))?;
+
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let mut stdout = io::stdout();
@@ -74,16 +74,16 @@ async fn run() -> anyhow::Result<()> {
             }
         }
     });
-    
+
     let stdin = io::stdin();
     let mut lines = io::BufReader::new(stdin).lines();
-    
+
     while let Some(line) = lines.next_line().await? {
         if let Err(e) = agent.process(&line).await {
             error!("Error processing request: {}", e);
         }
     }
-    
+
     Ok(())
 }
 
