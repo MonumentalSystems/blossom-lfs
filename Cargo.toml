@@ -1,0 +1,61 @@
+[package]
+name = "blossom-lfs"
+version = "0.1.0"
+edition = "2021"
+description = "Git LFS custom transfer agent for Blossom blob storage with chunking support"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/MonumentalSystems/BlossomLFS"
+keywords = ["git", "lfs", "blossom", "nostr", "storage"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.39", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"]}
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Nostr signing
+nostr = "0.35"
+nostr-sdk = "0.35"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+base64-url = "2.0"
+secp256k1 = "0.29"
+
+# Async utilities
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["compat", "io"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Logging
+log = "0.4"
+simplelog = "0.12"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Git config parsing
+gix-config = "0.38"
+
+# Additional utilities
+bytes = "1.7"
+async-stream = "0.3"
+
+[dev-dependencies]
+tempfile = "3.10"
+wiremock = "0.6"
+proptest = "1.5"
+tokio-test = "0.4"
+axum = "0.7"
+secp256k1 = { version = "0.29", features = ["rand"] }
