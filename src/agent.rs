@@ -8,7 +8,7 @@ use crate::{
 use anyhow::Context as _;
 use log::debug;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const TEMP_DIR: &str = ".blossom-lfs-tmp";
 
@@ -145,10 +145,7 @@ impl Agent {
 
                 send_progress(&sender, &oid, 0, 0, 0).await;
 
-                let blob_data = client
-                    .download_blob(&oid, Some(&auth_token))
-                    .await
-                    .map_err(|e| BlossomLfsError::from(e))?;
+                let blob_data = client.download_blob(&oid, Some(&auth_token)).await?;
 
                 tokio::fs::create_dir_all(output_path.parent().unwrap())
                     .await
@@ -160,8 +157,8 @@ impl Agent {
                     .and_then(|s| Manifest::from_json(s).ok());
 
                 if let Some(manifest) = manifest_result {
-                    if !manifest.verify().map_err(|e| BlossomLfsError::from(e))? {
-                        return Err(BlossomLfsError::MerkleVerificationFailed.into());
+                    if !manifest.verify()? {
+                        return Err(BlossomLfsError::MerkleVerificationFailed);
                     }
 
                     let total_size = manifest.file_size as usize;
@@ -220,15 +217,12 @@ async fn upload_chunked_file(
     client: &BlossomClient,
     config: &Config,
     chunker: &Chunker,
-    file_path: &PathBuf,
+    file_path: &Path,
     file_size: u64,
     sender: &tokio::sync::mpsc::Sender<String>,
     oid: &str,
 ) -> Result<Vec<String>> {
-    let (chunks, _) = chunker
-        .chunk_file(file_path)
-        .await
-        .map_err(|e| BlossomLfsError::from(e))?;
+    let (chunks, _) = chunker.chunk_file(file_path).await?;
 
     let auth_token = create_auth_token(config, ActionType::Upload, None)?;
 
@@ -238,8 +232,7 @@ async fn upload_chunked_file(
     for chunk in &chunks {
         let chunk_data = chunker
             .read_chunk(file_path, chunk.offset, chunk.size)
-            .await
-            .map_err(|e| BlossomLfsError::from(e))?;
+            .await?;
 
         let chunk_hash = hash_data(&chunk_data);
 
@@ -260,30 +253,25 @@ async fn download_chunked_file(
     client: &BlossomClient,
     config: &Config,
     manifest: &Manifest,
-    output_path: &PathBuf,
+    output_path: &Path,
     sender: &tokio::sync::mpsc::Sender<String>,
     oid: &str,
-    temp_dir: &PathBuf,
+    temp_dir: &Path,
 ) -> Result<()> {
     let auth_token = create_auth_token(config, ActionType::Get, None)?;
-    let assembler = ChunkAssembler::new(temp_dir.clone());
+    let assembler = ChunkAssembler::new(temp_dir.to_path_buf());
 
     let mut bytes_so_far = 0usize;
     let total_size = manifest.file_size as usize;
 
-    for chunk_info in manifest
-        .all_chunk_info()
-        .map_err(|e| BlossomLfsError::from(e))?
-    {
+    for chunk_info in manifest.all_chunk_info()? {
         let chunk_data = client
             .download_blob(&chunk_info.hash, Some(&auth_token))
-            .await
-            .map_err(|e| BlossomLfsError::from(e))?;
+            .await?;
 
         assembler
             .write_chunk(oid, chunk_info.index, &chunk_data)
-            .await
-            .map_err(|e| BlossomLfsError::from(e))?;
+            .await?;
 
         bytes_so_far += chunk_info.size;
         send_progress(sender, oid, bytes_so_far, total_size, chunk_info.size).await;
@@ -291,13 +279,9 @@ async fn download_chunked_file(
 
     assembler
         .assemble(oid, output_path, manifest.chunks)
-        .await
-        .map_err(|e| BlossomLfsError::from(e))?;
+        .await?;
 
-    assembler
-        .cleanup(oid)
-        .await
-        .map_err(|e| BlossomLfsError::from(e))?;
+    assembler.cleanup(oid).await?;
 
     Ok(())
 }

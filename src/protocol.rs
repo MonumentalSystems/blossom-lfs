@@ -35,6 +35,12 @@ impl ProtocolError {
 #[derive(Serialize, Debug)]
 pub struct InitResponse {}
 
+impl Default for InitResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InitResponse {
     pub fn new() -> Self {
         Self {}

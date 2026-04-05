@@ -83,7 +83,7 @@ impl MerkleTree {
         let mut index = leaf_index;
 
         for level in &self.tree[..self.tree.len() - 1] {
-            let sibling_index = if index % 2 == 0 {
+            let sibling_index = if index.is_multiple_of(2) {
                 // Current node is on the left, sibling is on the right
                 if index + 1 < level.len() {
                     index + 1
@@ -97,7 +97,7 @@ impl MerkleTree {
             };
 
             let sibling_hash = level[sibling_index].clone();
-            let is_left = index % 2 != 0; // sibling is on left if current is on right (odd index)
+            let is_left = !index.is_multiple_of(2); // sibling is on left if current is on right (odd index)
 
             proof.push((sibling_hash, is_left));
             index /= 2;

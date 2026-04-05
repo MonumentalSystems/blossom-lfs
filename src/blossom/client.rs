@@ -59,7 +59,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .head(&format!("{}/upload", self.server_url))
+            .head(format!("{}/upload", self.server_url))
             .headers(headers)
             .send()
             .await
@@ -119,7 +119,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .put(&format!("{}/upload", self.server_url))
+            .put(format!("{}/upload", self.server_url))
             .headers(headers)
             .body(data)
             .send()
@@ -162,7 +162,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .head(&format!("{}/{}", self.server_url, sha256))
+            .head(format!("{}/{}", self.server_url, sha256))
             .headers(headers)
             .send()
             .await
@@ -189,7 +189,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .get(&format!("{}/{}", self.server_url, sha256))
+            .get(format!("{}/{}", self.server_url, sha256))
             .headers(headers)
             .send()
             .await
@@ -241,7 +241,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .get(&format!("{}/{}", self.server_url, sha256))
+            .get(format!("{}/{}", self.server_url, sha256))
             .headers(headers)
             .send()
             .await
@@ -283,7 +283,7 @@ impl BlossomClient {
 
         let response = self
             .client
-            .delete(&format!("{}/{}", self.server_url, sha256))
+            .delete(format!("{}/{}", self.server_url, sha256))
             .headers(headers)
             .send()
             .await
