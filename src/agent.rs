@@ -8,10 +8,10 @@
 
 use crate::{
     chunking::{ChunkAssembler, Chunker, Manifest},
-    config::{Config, Transport},
+    config::{Config, Transport as TransportMode},
     error::{BlossomLfsError, Result},
     protocol::{InitResponse, ProgressResponse, TransferResponse},
-    transport::{BlobTransport, HttpTransport},
+    transport::Transport,
 };
 use anyhow::Context as _;
 use blossom_rs::auth::Signer;
@@ -25,12 +25,12 @@ const TEMP_DIR: &str = ".blossom-lfs-tmp";
 /// The main transfer agent that handles Git LFS requests.
 ///
 /// Created once per process and reused across all transfers. Wraps a
-/// [`BlobTransport`] for server communication and a [`Chunker`] for splitting
+/// [`Transport`] for server communication and a [`Chunker`] for splitting
 /// large files. The transport is selected based on the `transport` config
 /// option (HTTP by default, iroh QUIC when enabled).
 pub struct Agent {
     config: Config,
-    transport: Arc<dyn BlobTransport>,
+    transport: Arc<Transport>,
     sender: tokio::sync::mpsc::Sender<String>,
     tasks: tokio::task::JoinSet<()>,
     chunker: Chunker,
@@ -46,18 +46,18 @@ impl Agent {
         let signer = Signer::from_secret_hex(&config.secret_key_hex)
             .map_err(|e| BlossomLfsError::Config(format!("Failed to create signer: {}", e)))?;
 
-        let transport: Arc<dyn BlobTransport> = match config.transport {
-            Transport::Http => {
-                Arc::new(HttpTransport::new(
+        let transport = match config.transport {
+            TransportMode::Http => {
+                Transport::http(
                     config.server_url.clone(),
                     signer,
                     std::time::Duration::from_secs(300),
-                ))
+                )
             }
-            Transport::Iroh => {
+            TransportMode::Iroh => {
                 #[cfg(feature = "iroh")]
                 {
-                    Arc::new(create_iroh_transport(&config, signer).await?)
+                    create_iroh_transport(&config, signer).await?
                 }
                 #[cfg(not(feature = "iroh"))]
                 {
@@ -69,6 +69,7 @@ impl Agent {
                 }
             }
         };
+        let transport = Arc::new(transport);
 
         let chunker = Chunker::new(config.chunk_size)?;
         let temp_dir = PathBuf::from(TEMP_DIR);
@@ -127,7 +128,7 @@ impl Agent {
 
                 if chunked {
                     upload_chunked_file(
-                        transport.as_ref(), &config, &chunker, &file_path, file_size, &sender, &oid,
+                        &transport, &config, &chunker, &file_path, file_size, &sender, &oid,
                     )
                     .await?;
                 }
@@ -219,7 +220,7 @@ impl Agent {
                         send_progress(&sender, &oid, total_size, total_size, total_size).await;
                     } else {
                         download_chunked_file(
-                            transport.as_ref(),
+                            &transport,
                             &config,
                             &manifest,
                             &output_path,
@@ -263,27 +264,25 @@ impl Agent {
 
 /// Create an iroh transport from the config.
 ///
-/// `server_url` is parsed as an iroh node ID (base32-encoded).
+/// `server_url` is parsed as an iroh endpoint ID (base32-encoded).
 #[cfg(feature = "iroh")]
 async fn create_iroh_transport(
     config: &Config,
     signer: Signer,
-) -> Result<crate::transport::IrohTransport> {
-    use crate::transport::IrohTransport;
-
+) -> Result<Transport> {
     let endpoint: iroh::endpoint::Endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
         .await
         .map_err(|e| BlossomLfsError::Config(format!("failed to create iroh endpoint: {}", e)))?;
 
-    info!(iroh.node_id = %config.server_url, "connecting via iroh QUIC");
+    info!(iroh.endpoint_id = %config.server_url, "connecting via iroh QUIC");
 
-    IrohTransport::new(endpoint, signer, &config.server_url)
-        .map_err(|e| BlossomLfsError::Config(e))
+    Transport::iroh(endpoint, signer, &config.server_url)
+        .map_err(BlossomLfsError::Config)
 }
 
 #[instrument(name = "lfs.upload.chunked", skip_all, fields(blob.oid = %oid, blob.size = file_size, blob.chunks = tracing::field::Empty, chunks.skipped = tracing::field::Empty))]
 async fn upload_chunked_file(
-    transport: &dyn BlobTransport,
+    transport: &Transport,
     _config: &Config,
     chunker: &Chunker,
     file_path: &Path,
@@ -335,7 +334,7 @@ async fn upload_chunked_file(
 
 #[instrument(name = "lfs.download.chunked", skip_all, fields(blob.oid = %oid, blob.size = manifest.file_size, blob.chunks = manifest.chunks))]
 async fn download_chunked_file(
-    transport: &dyn BlobTransport,
+    transport: &Transport,
     _config: &Config,
     manifest: &Manifest,
     output_path: &Path,

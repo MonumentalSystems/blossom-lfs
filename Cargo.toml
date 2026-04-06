@@ -14,8 +14,8 @@ default = []
 iroh = ["blossom-rs/iroh-transport", "blossom-rs/pkarr-discovery", "dep:iroh"]
 
 [dependencies]
-# Blossom protocol client & auth
-blossom-rs = { version = "0.2", default-features = false, features = ["client"] }
+# Blossom protocol client & auth (path dep until unified-client branch ships)
+blossom-rs = { path = "/rjs/MonumentalSystems/blossom-rs", default-features = false, features = ["client"] }
 
 # Async runtime
 tokio = { version = "1.39", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"]}
@@ -37,9 +37,6 @@ clap = { version = "4.5", features = ["derive"] }
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
-
-# Async trait for transport abstraction
-async-trait = "0.1"
 
 # Optional: iroh QUIC transport (behind 'iroh' feature)
 iroh = { version = "0.97", optional = true }
