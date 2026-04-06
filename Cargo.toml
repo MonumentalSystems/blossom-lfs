@@ -51,3 +51,5 @@ wiremock = "0.6"
 proptest = "1.5"
 tokio-test = "0.4"
 axum = "0.7"
+# Enable server feature on blossom-rs for integration tests
+blossom-rs = { version = "0.3", features = ["server"] }
