@@ -1,6 +1,6 @@
 [package]
 name = "blossom-lfs"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "Git LFS custom transfer agent for Blossom blob storage with chunking support"
 license = "MIT"
@@ -30,9 +30,9 @@ hex = "0.4"
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 
-# Logging
-log = "0.4"
-simplelog = "0.12"
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 
 # Error handling
 anyhow = "1.0"

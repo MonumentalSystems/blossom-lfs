@@ -1,13 +1,24 @@
+//! Binary Merkle tree for chunk integrity verification.
+//!
+//! Given a list of SHA-256 chunk hashes the tree is built bottom-up. Each
+//! parent node is `SHA256(left_bytes || right_bytes)`. When a level has an
+//! odd number of nodes the last node is paired with itself.
+
 use crate::error::{BlossomLfsError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// A proof that a specific leaf belongs to the tree.
+///
+/// Each entry in [`proof`](MerkleProof::proof) is `(sibling_hash, is_left)`
+/// where `is_left` is `true` when the sibling is on the left side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MerkleProof {
     pub hash: String,
     pub proof: Vec<(String, bool)>, // (sibling_hash, is_left) - is_left true if sibling is on the left
 }
 
+/// A binary Merkle tree built from chunk hashes.
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
     pub leaves: Vec<String>,
@@ -135,6 +146,8 @@ impl MerkleTree {
     }
 }
 
+/// Verify that `leaf_hash` belongs to a tree with the given `root` using the
+/// supplied proof path.
 pub fn verify_merkle_root(root: &str, leaf_hash: &str, proof: &[(String, bool)]) -> bool {
     let mut current_hash = leaf_hash.to_string();
 

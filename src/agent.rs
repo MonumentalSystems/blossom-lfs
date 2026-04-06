@@ -1,3 +1,11 @@
+//! Git LFS custom transfer agent.
+//!
+//! Implements the Git LFS
+//! [custom transfer protocol](https://github.com/git-lfs/git-lfs/blob/main/docs/custom-transfers.md),
+//! reading JSON requests from stdin and writing responses to stdout. Each
+//! upload/download is spawned as an async task so multiple transfers can
+//! proceed concurrently.
+
 use crate::{
     chunking::{ChunkAssembler, Chunker, Manifest},
     config::Config,
@@ -6,13 +14,18 @@ use crate::{
 };
 use anyhow::Context as _;
 use blossom_rs::{auth::Signer, BlossomClient};
-use log::debug;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::{debug, info, instrument, warn, Instrument, Span};
 
 const TEMP_DIR: &str = ".blossom-lfs-tmp";
 
+/// The main transfer agent that handles Git LFS requests.
+///
+/// Created once per process and reused across all transfers. Wraps a
+/// [`BlossomClient`] for server communication and a [`Chunker`] for splitting
+/// large files.
 pub struct Agent {
     config: Config,
     client: Arc<BlossomClient>,
@@ -23,6 +36,10 @@ pub struct Agent {
 }
 
 impl Agent {
+    /// Create a new agent from the given configuration.
+    ///
+    /// Initialises the [`BlossomClient`] (with a 300-second timeout) and
+    /// the [`Chunker`]. Responses are sent through `sender`.
     pub fn new(config: Config, sender: tokio::sync::mpsc::Sender<String>) -> Result<Self> {
         let signer = Signer::from_secret_hex(&config.secret_key_hex)
             .map_err(|e| BlossomLfsError::Config(format!("Failed to create signer: {}", e)))?;
@@ -44,8 +61,12 @@ impl Agent {
         })
     }
 
+    /// Dispatch a single JSON-line request from Git LFS.
+    ///
+    /// Supported events: `init`, `upload`, `download`, `terminate`.
+    #[instrument(name = "lfs.agent.process", skip_all)]
     pub async fn process(&mut self, request: &str) -> Result<()> {
-        debug!("request: {}", request);
+        debug!(raw_request = %request, "processing LFS request");
         let request: crate::protocol::Request =
             serde_json::from_str(request).context("invalid request")?;
 
@@ -70,14 +91,19 @@ impl Agent {
         let chunker = self.chunker.clone();
 
         self.tasks.spawn(async move {
+            let span = tracing::info_span!("lfs.upload", blob.oid = %oid, blob.size = tracing::field::Empty, blob.chunked = tracing::field::Empty);
             let status: Result<Option<String>> = async {
                 let file_path = PathBuf::from(&path);
                 let metadata = tokio::fs::metadata(&file_path)
                     .await
                     .context("Failed to read file metadata")?;
                 let file_size = metadata.len();
+                Span::current().record("blob.size", file_size);
 
-                if chunker.should_chunk(file_size) {
+                let chunked = chunker.should_chunk(file_size);
+                Span::current().record("blob.chunked", chunked);
+
+                if chunked {
                     upload_chunked_file(
                         &client, &config, &chunker, &file_path, file_size, &sender, &oid,
                     )
@@ -100,8 +126,10 @@ impl Agent {
                         .upload(&data, "application/octet-stream")
                         .await
                         .map_err(BlossomLfsError::Blossom)?;
+
+                    info!(blob.oid = %oid, blob.size = file_size, "blob uploaded");
                 } else {
-                    debug!("blob {} already exists on server, skipping upload", oid);
+                    info!(blob.oid = %oid, "blob already exists, skipped upload");
                 }
 
                 send_progress(
@@ -115,6 +143,7 @@ impl Agent {
 
                 Ok(None)
             }
+            .instrument(span)
             .await;
 
             send_response(&sender, TransferResponse::new(oid, status).json()).await;
@@ -129,6 +158,7 @@ impl Agent {
         let output_path = lfs_object_path(&oid);
 
         self.tasks.spawn(async move {
+            let span = tracing::info_span!("lfs.download", blob.oid = %oid, blob.size = tracing::field::Empty, blob.chunked = tracing::field::Empty);
             let status: Result<Option<String>> = async {
                 send_progress(&sender, &oid, 0, 0, 0).await;
 
@@ -148,10 +178,13 @@ impl Agent {
 
                 if let Some(manifest) = manifest_result {
                     if !manifest.verify()? {
+                        warn!(blob.oid = %oid, "merkle tree verification failed");
                         return Err(BlossomLfsError::MerkleVerificationFailed);
                     }
 
                     let total_size = manifest.file_size as usize;
+                    Span::current().record("blob.size", total_size as u64);
+                    Span::current().record("blob.chunked", true);
                     send_progress(&sender, &oid, 0, total_size, 0).await;
 
                     if manifest.chunks == 1 {
@@ -178,9 +211,13 @@ impl Agent {
                         .await
                         .context("Failed to download chunked file")?;
                     }
+
+                    info!(blob.oid = %oid, blob.size = total_size, blob.chunks = manifest.chunks, "chunked blob downloaded");
                 } else {
                     // Raw blob — write directly
                     let total_size = blob_data.len();
+                    Span::current().record("blob.size", total_size as u64);
+                    Span::current().record("blob.chunked", false);
                     send_progress(&sender, &oid, 0, total_size, 0).await;
 
                     tokio::fs::write(&output_path, &blob_data)
@@ -188,10 +225,12 @@ impl Agent {
                         .context("Failed to write file")?;
 
                     send_progress(&sender, &oid, total_size, total_size, total_size).await;
+                    info!(blob.oid = %oid, blob.size = total_size, "blob downloaded");
                 }
 
                 Ok(Some(output_path.to_string_lossy().into()))
             }
+            .instrument(span)
             .await;
 
             send_response(&sender, TransferResponse::new(oid, status).json()).await;
@@ -203,6 +242,7 @@ impl Agent {
     }
 }
 
+#[instrument(name = "lfs.upload.chunked", skip_all, fields(blob.oid = %oid, blob.size = file_size, blob.chunks = tracing::field::Empty, chunks.skipped = tracing::field::Empty))]
 async fn upload_chunked_file(
     client: &BlossomClient,
     _config: &Config,
@@ -213,9 +253,11 @@ async fn upload_chunked_file(
     oid: &str,
 ) -> Result<Vec<String>> {
     let (chunks, _) = chunker.chunk_file(file_path).await?;
+    Span::current().record("blob.chunks", chunks.len());
 
     let mut bytes_so_far = 0usize;
     let mut chunk_hashes = Vec::new();
+    let mut skipped = 0u32;
 
     for chunk in &chunks {
         let chunk_data = chunker
@@ -235,8 +277,10 @@ async fn upload_chunked_file(
                 .upload(&chunk_data, "application/octet-stream")
                 .await
                 .map_err(BlossomLfsError::Blossom)?;
+            debug!(chunk.sha256 = %chunk_hash, chunk.size = chunk.size, chunk.index = chunk.index, "chunk uploaded");
         } else {
-            debug!("chunk {} already exists on server, skipping", chunk_hash);
+            skipped += 1;
+            debug!(chunk.sha256 = %chunk_hash, chunk.index = chunk.index, "chunk already exists, skipped");
         }
 
         chunk_hashes.push(chunk_hash);
@@ -245,9 +289,13 @@ async fn upload_chunked_file(
         send_progress(sender, oid, bytes_so_far, file_size as usize, chunk.size).await;
     }
 
+    Span::current().record("chunks.skipped", skipped);
+    info!(blob.chunks = chunks.len(), chunks.skipped = skipped, "chunked upload complete");
+
     Ok(chunk_hashes)
 }
 
+#[instrument(name = "lfs.download.chunked", skip_all, fields(blob.oid = %oid, blob.size = manifest.file_size, blob.chunks = manifest.chunks))]
 async fn download_chunked_file(
     client: &BlossomClient,
     _config: &Config,
@@ -272,6 +320,8 @@ async fn download_chunked_file(
             .write_chunk(oid, chunk_info.index, &chunk_data)
             .await?;
 
+        debug!(chunk.sha256 = %chunk_info.hash, chunk.size = chunk_info.size, chunk.index = chunk_info.index, "chunk downloaded");
+
         bytes_so_far += chunk_info.size;
         send_progress(sender, oid, bytes_so_far, total_size, chunk_info.size).await;
     }
@@ -281,6 +331,8 @@ async fn download_chunked_file(
         .await?;
 
     assembler.cleanup(oid).await?;
+
+    info!(blob.chunks = manifest.chunks, "chunked download assembled");
 
     Ok(())
 }
@@ -292,7 +344,7 @@ fn hash_data(data: &[u8]) -> String {
 }
 
 async fn send_response(sender: &tokio::sync::mpsc::Sender<String>, msg: String) {
-    debug!("response: {}", &msg);
+    debug!(lfs.response = %msg, "sending LFS response");
     let _ = sender.send(msg).await;
 }
 

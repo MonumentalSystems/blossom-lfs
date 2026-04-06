@@ -1,20 +1,42 @@
+//! Configuration loading for the blossom-lfs agent.
+//!
+//! Configuration is resolved in priority order:
+//!
+//! 1. `.lfsdalconfig` in the repository root (INI format).
+//! 2. `.git/config` (INI format, under `[lfs-dal]`).
+//! 3. Environment variables (`BLOSSOM_SERVER_URL`, `NOSTR_PRIVATE_KEY`).
+//!
+//! Private keys may be provided as either a 64-character hex string or a
+//! Bech32-encoded `nsec1…` value.
+
 use anyhow::{Context as _, Result};
 use std::path::PathBuf;
 
+/// Default chunk size: 16 MiB.
 const DEFAULT_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_CONCURRENT_UPLOADS: usize = 8;
 const DEFAULT_CONCURRENT_DOWNLOADS: usize = 8;
 
+/// Runtime configuration for the LFS agent.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Base URL of the Blossom server (e.g. `https://blossom.example.com`).
     pub server_url: String,
+    /// Nostr private key as a 64-character hex string.
     pub secret_key_hex: String,
+    /// Maximum bytes per chunk (default 16 MiB).
     pub chunk_size: usize,
+    /// Maximum number of concurrent chunk uploads.
     pub max_concurrent_uploads: usize,
+    /// Maximum number of concurrent chunk downloads.
     pub max_concurrent_downloads: usize,
 }
 
 impl Config {
+    /// Load configuration from git config files or environment variables.
+    ///
+    /// Tries `.lfsdalconfig`, then `.git/config`, then falls back to
+    /// environment variables.
     pub fn from_git_config() -> Result<Self> {
         let config_paths = vec![PathBuf::from(".lfsdalconfig"), PathBuf::from(".git/config")];
 

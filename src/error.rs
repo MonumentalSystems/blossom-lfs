@@ -1,5 +1,8 @@
+//! Error types for the blossom-lfs agent.
+
 use thiserror::Error;
 
+/// All errors that can occur during LFS transfer operations.
 #[derive(Error, Debug)]
 pub enum BlossomLfsError {
     #[error("Configuration error: {0}")]
@@ -45,4 +48,5 @@ impl From<anyhow::Error> for BlossomLfsError {
     }
 }
 
+/// Convenience alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, BlossomLfsError>;

@@ -1,3 +1,9 @@
+//! Chunk manifest for reconstructing files from individually-stored blobs.
+//!
+//! A [`Manifest`] is a JSON document uploaded to the Blossom server alongside
+//! the chunks. It records the chunk hashes, sizes, Merkle root, and enough
+//! metadata to reassemble the original file on download.
+
 use crate::{
     chunking::merkle::MerkleTree,
     error::{BlossomLfsError, Result},
@@ -8,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MANIFEST_VERSION: &str = "1.0";
 
+/// Metadata for one chunk within a [`Manifest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkInfo {
     pub index: usize,
@@ -16,6 +23,11 @@ pub struct ChunkInfo {
     pub size: usize,
 }
 
+/// Version 1.0 chunk manifest.
+///
+/// Serialised as JSON and stored as a regular Blossom blob. The OID used by
+/// Git LFS points to this manifest, which in turn references the individual
+/// chunk blobs via their SHA-256 hashes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub version: String,

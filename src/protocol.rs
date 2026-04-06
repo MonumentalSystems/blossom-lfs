@@ -1,5 +1,13 @@
+//! Git LFS custom transfer protocol message types.
+//!
+//! Implements the JSON-line wire format defined by the
+//! [Git LFS custom transfer](https://github.com/git-lfs/git-lfs/blob/main/docs/custom-transfers.md)
+//! specification. All messages are newline-delimited JSON exchanged over
+//! stdin/stdout between Git LFS and the transfer agent.
+
 use serde::{Deserialize, Serialize};
 
+/// An incoming request from Git LFS.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "event")]
 pub enum Request {
@@ -20,6 +28,7 @@ impl TryFrom<&str> for Request {
     }
 }
 
+/// Error payload included in a failed [`TransferResponse`].
 #[derive(Serialize, Debug)]
 pub struct ProtocolError {
     code: i8,
@@ -32,6 +41,7 @@ impl ProtocolError {
     }
 }
 
+/// Empty acknowledgement sent in response to the `init` event.
 #[derive(Serialize, Debug)]
 pub struct InitResponse {}
 
@@ -51,6 +61,7 @@ impl InitResponse {
     }
 }
 
+/// Progress update sent to Git LFS during a transfer.
 #[derive(Serialize, Debug)]
 pub struct ProgressResponse {
     event: String,
@@ -84,6 +95,7 @@ impl ProgressResponse {
     }
 }
 
+/// Final response for an upload or download, indicating success or failure.
 #[derive(Serialize, Debug)]
 #[serde(untagged)]
 pub enum TransferResponse {

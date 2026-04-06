@@ -1,7 +1,8 @@
 use blossom_lfs::{Agent, Config};
 use clap::Parser;
-use log::error;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
+use tracing::error;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -10,9 +11,13 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     log_output: Option<std::path::PathBuf>,
 
-    /// Set log level
+    /// Set log level (trace, debug, info, warn, error)
     #[arg(long, value_name = "LEVEL", default_value = "info")]
-    log_level: log::Level,
+    log_level: String,
+
+    /// Emit logs as JSON (structured OTEL-style output)
+    #[arg(long)]
+    log_json: bool,
 
     /// List available configuration
     #[arg(long)]
@@ -22,22 +27,49 @@ struct Cli {
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if let Some(log_output) = cli.log_output {
-        simplelog::WriteLogger::init(
-            cli.log_level.to_level_filter(),
-            simplelog::Config::default(),
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_output)?,
-        )?;
+    let filter = EnvFilter::try_new(&cli.log_level)
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    if let Some(log_output) = &cli.log_output {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_output)?;
+
+        if cli.log_json {
+            fmt()
+                .json()
+                .with_env_filter(filter)
+                .with_writer(file)
+                .with_target(true)
+                .with_span_events(fmt::format::FmtSpan::CLOSE)
+                .init();
+        } else {
+            fmt()
+                .with_env_filter(filter)
+                .with_writer(file)
+                .with_target(true)
+                .with_ansi(false)
+                .init();
+        }
     } else {
-        simplelog::TermLogger::init(
-            cli.log_level.to_level_filter(),
-            simplelog::Config::default(),
-            simplelog::TerminalMode::Stderr,
-            simplelog::ColorChoice::Auto,
-        )?;
+        // Default: stderr so we don't interfere with the LFS protocol on stdout
+        if cli.log_json {
+            fmt()
+                .json()
+                .with_env_filter(filter)
+                .with_writer(std::io::stderr)
+                .with_target(true)
+                .with_span_events(fmt::format::FmtSpan::CLOSE)
+                .init();
+        } else {
+            fmt()
+                .with_env_filter(filter)
+                .with_writer(std::io::stderr)
+                .with_target(true)
+                .init();
+        }
     }
 
     if cli.config_info {
@@ -79,7 +111,7 @@ async fn run() -> anyhow::Result<()> {
 
     while let Some(line) = lines.next_line().await? {
         if let Err(e) = agent.process(&line).await {
-            error!("Error processing request: {}", e);
+            error!(error.message = %e, "error processing LFS request");
         }
     }
 
@@ -90,7 +122,6 @@ async fn run() -> anyhow::Result<()> {
 async fn main() {
     if let Err(e) = run().await {
         eprintln!("{}", e);
-        error!("{}", e);
         std::process::exit(1);
     }
 }

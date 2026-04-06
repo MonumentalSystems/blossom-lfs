@@ -1,3 +1,11 @@
+//! File splitting and reassembly.
+//!
+//! [`Chunker`] reads a file sequentially and produces a list of [`Chunk`]
+//! descriptors, each containing the byte offset, size, and SHA-256 hash of
+//! that segment. [`ChunkAssembler`] performs the inverse: it writes individual
+//! chunk files to a temporary directory and concatenates them back into the
+//! original file.
+
 use crate::error::{BlossomLfsError, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -6,20 +14,27 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
+/// Metadata for a single chunk produced by [`Chunker::chunk_file`].
 #[derive(Debug, Clone)]
 pub struct Chunk {
+    /// Zero-based index of this chunk within the file.
     pub index: usize,
+    /// Byte offset from the start of the file.
     pub offset: u64,
+    /// Size of this chunk in bytes.
     pub size: usize,
+    /// SHA-256 hex digest of the chunk data.
     pub hash: String,
 }
 
+/// Splits files into fixed-size chunks and computes per-chunk SHA-256 hashes.
 #[derive(Clone)]
 pub struct Chunker {
     chunk_size: usize,
 }
 
 impl Chunker {
+    /// Create a new chunker with the given maximum chunk size in bytes.
     pub fn new(chunk_size: usize) -> Result<Self> {
         if chunk_size == 0 {
             return Err(BlossomLfsError::InvalidChunkSize(
@@ -29,6 +44,7 @@ impl Chunker {
         Ok(Self { chunk_size })
     }
 
+    /// Read `path` and split it into chunks, returning the chunk list and total file size.
     pub async fn chunk_file(&self, path: &Path) -> Result<(Vec<Chunk>, u64)> {
         let mut file = File::open(path).await?;
         let metadata = file.metadata().await?;
@@ -65,6 +81,7 @@ impl Chunker {
         Ok((chunks, file_size))
     }
 
+    /// Read a single chunk from `path` at the given byte offset and size.
     pub async fn read_chunk(&self, path: &Path, offset: u64, size: usize) -> Result<Vec<u8>> {
         let mut file = File::open(path).await?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
@@ -81,11 +98,14 @@ impl Chunker {
         hex::encode(hasher.finalize())
     }
 
+    /// Returns `true` if the file is larger than the configured chunk size.
     pub fn should_chunk(&self, file_size: u64) -> bool {
         file_size > self.chunk_size as u64
     }
 }
 
+/// Writes downloaded chunks to a temporary directory and reassembles them
+/// into the original file.
 pub struct ChunkAssembler {
     output_dir: PathBuf,
 }
