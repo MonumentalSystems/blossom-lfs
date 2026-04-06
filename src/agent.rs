@@ -125,29 +125,38 @@ impl Agent {
                 Span::current().record("blob.chunked", chunked);
 
                 if chunked {
-                    upload_chunked_file(
+                    let chunk_hashes = upload_chunked_file(
                         &transport, &config, &chunker, &file_path, file_size, &sender, &oid,
                     )
                     .await?;
+
+                    // Build and upload manifest so chunked downloads work
+                    let manifest = Manifest::new(
+                        file_size,
+                        config.chunk_size,
+                        chunk_hashes,
+                        file_path.file_name().map(|n| n.to_string_lossy().into()),
+                        Some("application/octet-stream".to_string()),
+                        None,
+                    )?;
+                    let manifest_json = manifest.to_json()?;
+                    transport
+                        .upload(manifest_json.as_bytes(), "application/json")
+                        .await?;
+                    debug!(manifest.merkle_root = %manifest.merkle_root, "manifest uploaded");
                 }
 
-                // Upload the complete file so it's retrievable by OID,
-                // but skip if it already exists on the server
-                let already_exists = transport
-                    .exists(&oid)
-                    .await
-                    .unwrap_or(false);
+                // Upload the complete file (streaming) so it's retrievable
+                // by OID (Git LFS uses the file's SHA-256 as OID).
+                // Skip if it already exists on the server.
+                let already_exists = transport.exists(&oid).await.unwrap_or(false);
 
                 if !already_exists {
-                    let data = tokio::fs::read(&file_path)
-                        .await
-                        .context("Failed to read file")?;
-
                     transport
-                        .upload(&data, "application/octet-stream")
+                        .upload_file(&file_path, "application/octet-stream")
                         .await?;
 
-                    info!(blob.oid = %oid, blob.size = file_size, "blob uploaded");
+                    info!(blob.oid = %oid, blob.size = file_size, "blob uploaded (streaming)");
                 } else {
                     info!(blob.oid = %oid, "blob already exists, skipped upload");
                 }

@@ -101,4 +101,24 @@ impl Transport {
         }
         .map_err(BlossomLfsError::Blossom)
     }
+
+    /// Upload a file by path without buffering it in memory.
+    ///
+    /// Two-pass approach: first pass computes SHA-256 (streaming), second
+    /// pass streams the file to the server. Handles 600GB+ files with
+    /// constant memory.
+    pub async fn upload_file(
+        &self,
+        path: &std::path::Path,
+        content_type: &str,
+    ) -> Result<BlobDescriptor> {
+        match self {
+            Self::Http(c) => BlobClient::upload_file(c, &(), path, content_type).await,
+            #[cfg(feature = "iroh")]
+            Self::Iroh { client, peer } => {
+                BlobClient::upload_file(client, peer, path, content_type).await
+            }
+        }
+        .map_err(BlossomLfsError::Blossom)
+    }
 }
