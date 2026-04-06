@@ -44,11 +44,7 @@ fn live_client() -> BlossomClient {
     };
 
     let signer = Signer::from_secret_hex(&hex_key).expect("failed to create signer");
-    BlossomClient::with_timeout(
-        vec![server_url],
-        signer,
-        std::time::Duration::from_secs(30),
-    )
+    BlossomClient::with_timeout(vec![server_url], signer, std::time::Duration::from_secs(30))
 }
 
 /// Generate a unique test payload so tests don't collide.
@@ -77,7 +73,10 @@ async fn live_upload_and_download() {
         .await
         .expect("upload failed");
 
-    assert_eq!(descriptor.sha256, expected_hash, "server returned wrong hash");
+    assert_eq!(
+        descriptor.sha256, expected_hash,
+        "server returned wrong hash"
+    );
     assert_eq!(descriptor.size, data.len() as u64);
 
     // Download
@@ -86,7 +85,10 @@ async fn live_upload_and_download() {
         .await
         .expect("download failed");
 
-    assert_eq!(downloaded, data, "downloaded data should match uploaded data");
+    assert_eq!(
+        downloaded, data,
+        "downloaded data should match uploaded data"
+    );
 }
 
 #[tokio::test]
@@ -216,15 +218,15 @@ async fn live_chunked_upload_and_manifest() {
     let parsed = Manifest::from_json(&String::from_utf8_lossy(&downloaded)).unwrap();
     assert_eq!(parsed.file_size, 192);
     assert_eq!(parsed.chunks, 3);
-    assert!(parsed.verify().unwrap(), "downloaded manifest should verify");
+    assert!(
+        parsed.verify().unwrap(),
+        "downloaded manifest should verify"
+    );
 
     // Download each chunk and reassemble
     let mut reassembled = Vec::new();
     for hash in &parsed.chunk_hashes {
-        let chunk_data: Vec<u8> = client
-            .download(hash)
-            .await
-            .expect("chunk download failed");
+        let chunk_data: Vec<u8> = client.download(hash).await.expect("chunk download failed");
         reassembled.extend_from_slice(&chunk_data);
     }
 

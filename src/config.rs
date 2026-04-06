@@ -175,8 +175,7 @@ fn normalize_to_hex(key: &str) -> Result<String> {
         Ok(hex::encode(secret_key.secret_bytes()))
     } else {
         // Validate it's valid hex and correct length
-        let bytes = hex::decode(key)
-            .map_err(|e| anyhow::anyhow!("Failed to decode hex: {}", e))?;
+        let bytes = hex::decode(key).map_err(|e| anyhow::anyhow!("Failed to decode hex: {}", e))?;
         if bytes.len() != 32 {
             anyhow::bail!("Invalid secret key length: expected 32 bytes");
         }

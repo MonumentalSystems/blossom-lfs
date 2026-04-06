@@ -47,13 +47,11 @@ impl Agent {
             .map_err(|e| BlossomLfsError::Config(format!("Failed to create signer: {}", e)))?;
 
         let transport = match config.transport {
-            TransportMode::Http => {
-                Transport::http(
-                    config.server_url.clone(),
-                    signer,
-                    std::time::Duration::from_secs(300),
-                )
-            }
+            TransportMode::Http => Transport::http(
+                config.server_url.clone(),
+                signer,
+                std::time::Duration::from_secs(300),
+            ),
             TransportMode::Iroh => {
                 #[cfg(feature = "iroh")]
                 {
@@ -266,18 +264,14 @@ impl Agent {
 ///
 /// `server_url` is parsed as an iroh endpoint ID (base32-encoded).
 #[cfg(feature = "iroh")]
-async fn create_iroh_transport(
-    config: &Config,
-    signer: Signer,
-) -> Result<Transport> {
+async fn create_iroh_transport(config: &Config, signer: Signer) -> Result<Transport> {
     let endpoint: iroh::endpoint::Endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
         .await
         .map_err(|e| BlossomLfsError::Config(format!("failed to create iroh endpoint: {}", e)))?;
 
     info!(iroh.endpoint_id = %config.server_url, "connecting via iroh QUIC");
 
-    Transport::iroh(endpoint, signer, &config.server_url)
-        .map_err(BlossomLfsError::Config)
+    Transport::iroh(endpoint, signer, &config.server_url).map_err(BlossomLfsError::Config)
 }
 
 #[instrument(name = "lfs.upload.chunked", skip_all, fields(blob.oid = %oid, blob.size = file_size, blob.chunks = tracing::field::Empty, chunks.skipped = tracing::field::Empty))]
@@ -305,10 +299,7 @@ async fn upload_chunked_file(
         let chunk_hash = hash_data(&chunk_data);
 
         // Skip upload if this chunk already exists on the server
-        let already_exists = transport
-            .exists(&chunk_hash)
-            .await
-            .unwrap_or(false);
+        let already_exists = transport.exists(&chunk_hash).await.unwrap_or(false);
 
         if !already_exists {
             transport
@@ -327,7 +318,11 @@ async fn upload_chunked_file(
     }
 
     Span::current().record("chunks.skipped", skipped);
-    info!(blob.chunks = chunks.len(), chunks.skipped = skipped, "chunked upload complete");
+    info!(
+        blob.chunks = chunks.len(),
+        chunks.skipped = skipped,
+        "chunked upload complete"
+    );
 
     Ok(chunk_hashes)
 }
@@ -348,9 +343,7 @@ async fn download_chunked_file(
     let total_size = manifest.file_size as usize;
 
     for chunk_info in manifest.all_chunk_info()? {
-        let chunk_data = transport
-            .download(&chunk_info.hash)
-            .await?;
+        let chunk_data = transport.download(&chunk_info.hash).await?;
 
         assembler
             .write_chunk(oid, chunk_info.index, &chunk_data)

@@ -197,7 +197,11 @@ mod tests {
                 .unwrap();
 
             let result = client.upload(&chunk_data, "application/octet-stream").await;
-            assert!(result.is_ok(), "Chunk upload should succeed: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "Chunk upload should succeed: {:?}",
+                result.err()
+            );
         }
 
         // Create and upload manifest
@@ -216,7 +220,11 @@ mod tests {
         let manifest_data = manifest_json.as_bytes();
 
         let result = client.upload(manifest_data, "application/json").await;
-        assert!(result.is_ok(), "Manifest upload should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Manifest upload should succeed: {:?}",
+            result.err()
+        );
 
         let manifest_hash = result.unwrap().sha256;
 

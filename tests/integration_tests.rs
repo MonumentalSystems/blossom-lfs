@@ -52,7 +52,11 @@ async fn test_blossom_client_download() {
         .await;
 
     let result = client.download(&hash).await;
-    assert!(result.is_ok(), "Download should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Download should succeed: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap(), test_data.to_vec());
 }
 

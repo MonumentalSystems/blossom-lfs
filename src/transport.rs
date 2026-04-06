@@ -18,7 +18,7 @@
 //! ```
 
 use crate::error::{BlossomLfsError, Result};
-use blossom_rs::{BlobClient, protocol::BlobDescriptor};
+use blossom_rs::{protocol::BlobDescriptor, BlobClient};
 
 /// Transport wrapping either HTTP or iroh QUIC blob operations.
 ///
@@ -75,7 +75,9 @@ impl Transport {
         match self {
             Self::Http(c) => BlobClient::upload(c, &(), data, content_type).await,
             #[cfg(feature = "iroh")]
-            Self::Iroh { client, peer } => BlobClient::upload(client, peer, data, content_type).await,
+            Self::Iroh { client, peer } => {
+                BlobClient::upload(client, peer, data, content_type).await
+            }
         }
         .map_err(BlossomLfsError::Blossom)
     }

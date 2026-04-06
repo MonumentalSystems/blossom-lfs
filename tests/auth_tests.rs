@@ -1,4 +1,4 @@
-use blossom_rs::auth::{build_blossom_auth, auth_header_value, Signer};
+use blossom_rs::auth::{auth_header_value, build_blossom_auth, Signer};
 
 fn generate_test_signer() -> Signer {
     Signer::generate()
@@ -8,7 +8,13 @@ fn generate_test_signer() -> Signer {
 fn test_build_blossom_auth_produces_valid_event() {
     let signer = generate_test_signer();
 
-    let event = build_blossom_auth(&signer, "upload", Some("abc123"), Some("cdn.example.com"), "Upload Blob");
+    let event = build_blossom_auth(
+        &signer,
+        "upload",
+        Some("abc123"),
+        Some("cdn.example.com"),
+        "Upload Blob",
+    );
 
     assert_eq!(event.kind, 24242);
     assert!(!event.id.is_empty());
