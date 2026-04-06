@@ -50,10 +50,13 @@
 pub mod agent;
 pub mod chunking;
 pub mod config;
+pub mod daemon;
 pub mod error;
+pub mod lock_client;
 pub mod protocol;
 pub mod transport;
 
 pub use agent::Agent;
 pub use config::Config;
+pub use daemon::run_daemon;
 pub use error::{BlossomLfsError, Result};

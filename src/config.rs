@@ -16,6 +16,7 @@ use std::path::PathBuf;
 const DEFAULT_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_CONCURRENT_UPLOADS: usize = 8;
 const DEFAULT_CONCURRENT_DOWNLOADS: usize = 8;
+const DEFAULT_DAEMON_PORT: u16 = 31921;
 
 /// Which transport to use for blob operations.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -42,6 +43,8 @@ pub struct Config {
     pub max_concurrent_downloads: usize,
     /// Transport mode: `http` (default) or `iroh`.
     pub transport: Transport,
+    /// Daemon port for lock proxy (default 31921).
+    pub daemon_port: u16,
 }
 
 impl Config {
@@ -66,6 +69,32 @@ impl Config {
         Self::from_env()
     }
 
+    /// Load configuration from a specific repo directory path.
+    ///
+    /// Looks for `.lfsdalconfig` and `.git/config` in the given directory.
+    /// Used by the daemon to load per-repo config.
+    pub fn from_repo_path(repo_path: &std::path::Path) -> Result<Self> {
+        let lfsdalconfig = repo_path.join(".lfsdalconfig");
+        if lfsdalconfig.exists() {
+            let content = std::fs::read_to_string(&lfsdalconfig)
+                .with_context(|| format!("Failed to read config: {:?}", lfsdalconfig))?;
+            if let Ok(config) = Self::parse_config(&content) {
+                return Ok(config);
+            }
+        }
+
+        let git_config = repo_path.join(".git/config");
+        if git_config.exists() {
+            let content = std::fs::read_to_string(&git_config)
+                .with_context(|| format!("Failed to read config: {:?}", git_config))?;
+            if let Ok(config) = Self::parse_config(&content) {
+                return Ok(config);
+            }
+        }
+
+        Self::from_env()
+    }
+
     fn parse_config(content: &str) -> Result<Self> {
         let mut server_url = None;
         let mut private_key_str = None;
@@ -73,6 +102,7 @@ impl Config {
         let mut max_concurrent_uploads = DEFAULT_CONCURRENT_UPLOADS;
         let mut max_concurrent_downloads = DEFAULT_CONCURRENT_DOWNLOADS;
         let mut transport = Transport::default();
+        let mut daemon_port = DEFAULT_DAEMON_PORT;
 
         for line in content.lines() {
             let line = line.trim();
@@ -105,6 +135,11 @@ impl Config {
                     "transport" => {
                         transport = parse_transport(value);
                     }
+                    "daemon-port" | "daemonPort" => {
+                        if let Ok(v) = value.parse() {
+                            daemon_port = v;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -126,6 +161,7 @@ impl Config {
             max_concurrent_uploads,
             max_concurrent_downloads,
             transport,
+            daemon_port,
         })
     }
 
@@ -142,6 +178,11 @@ impl Config {
             .map(|v| parse_transport(&v))
             .unwrap_or_default();
 
+        let daemon_port = std::env::var("BLOSSOM_DAEMON_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_DAEMON_PORT);
+
         Ok(Config {
             server_url,
             secret_key_hex,
@@ -149,6 +190,7 @@ impl Config {
             max_concurrent_uploads: DEFAULT_CONCURRENT_UPLOADS,
             max_concurrent_downloads: DEFAULT_CONCURRENT_DOWNLOADS,
             transport,
+            daemon_port,
         })
     }
 }
