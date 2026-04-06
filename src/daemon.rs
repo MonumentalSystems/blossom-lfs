@@ -290,10 +290,7 @@ async fn handle_unlock(
     let req: UnlockReq = serde_json::from_slice(&body).unwrap_or_default();
 
     match client.unlock(&slug, &lock_id, req.force).await {
-        Ok(lock) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "lock": lock })),
-        ),
+        Ok(lock) => (StatusCode::OK, Json(serde_json::json!({ "lock": lock }))),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {

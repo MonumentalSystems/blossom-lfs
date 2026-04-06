@@ -76,11 +76,7 @@ impl LockClient {
         Ok(auth_header_value(&event))
     }
 
-    pub async fn create_lock(
-        &self,
-        repo_slug: &str,
-        path: &str,
-    ) -> Result<LfsLock> {
+    pub async fn create_lock(&self, repo_slug: &str, path: &str) -> Result<LfsLock> {
         let url = format!("{}/lfs/{}/locks", self.server_url, repo_slug);
         let auth = self.auth_header("lock")?;
 
@@ -106,21 +102,13 @@ impl LockClient {
         } else if status == reqwest::StatusCode::CONFLICT {
             let lock_resp: LockResponse =
                 serde_json::from_str(&body).context("parse lock conflict response")?;
-            anyhow::bail!(
-                "path already locked by {}",
-                lock_resp.lock.owner.name
-            )
+            anyhow::bail!("path already locked by {}", lock_resp.lock.owner.name)
         } else {
             anyhow::bail!("lock create failed: {} - {}", status, body)
         }
     }
 
-    pub async fn unlock(
-        &self,
-        repo_slug: &str,
-        lock_id: &str,
-        force: bool,
-    ) -> Result<LfsLock> {
+    pub async fn unlock(&self, repo_slug: &str, lock_id: &str, force: bool) -> Result<LfsLock> {
         let url = format!(
             "{}/lfs/{}/locks/{}/unlock",
             self.server_url, repo_slug, lock_id
@@ -209,7 +197,10 @@ impl LockClient {
             .post(&url)
             .header("Authorization", auth)
             .header("Accept", "application/vnd.git-lfs+json")
-            .json(&VerifyRequest { cursor: cursor.map(String::from), limit })
+            .json(&VerifyRequest {
+                cursor: cursor.map(String::from),
+                limit,
+            })
             .send()
             .await
             .context("lock verify request failed")?;
@@ -220,7 +211,11 @@ impl LockClient {
         if status == reqwest::StatusCode::OK {
             let verify_resp: VerifyResponse =
                 serde_json::from_str(&body).context("parse verify response")?;
-            Ok((verify_resp.ours, verify_resp.theirs, verify_resp.next_cursor))
+            Ok((
+                verify_resp.ours,
+                verify_resp.theirs,
+                verify_resp.next_cursor,
+            ))
         } else if status == reqwest::StatusCode::NOT_FOUND {
             Ok((vec![], vec![], None))
         } else {

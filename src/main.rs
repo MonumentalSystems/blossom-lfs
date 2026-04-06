@@ -124,16 +124,15 @@ async fn run() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
             setup_locks(config.daemon_port)
         }
-        None => {
-            run_transfer_agent().await
-        }
+        None => run_transfer_agent().await,
     }
 }
 
 fn setup_locks(daemon_port: u16) -> anyhow::Result<()> {
     let repo_path = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get current directory: {}", e))?;
-    let canonical = repo_path.canonicalize()
+    let canonical = repo_path
+        .canonicalize()
         .map_err(|e| anyhow::anyhow!("Failed to canonicalize path: {}", e))?;
     let path_str = canonical.to_string_lossy();
 
@@ -147,7 +146,10 @@ fn setup_locks(daemon_port: u16) -> anyhow::Result<()> {
 
     println!("Configured lfs.locksurl = {}", locks_url);
     println!();
-    println!("Make sure 'blossom-lfs daemon' is running on port {}.", daemon_port);
+    println!(
+        "Make sure 'blossom-lfs daemon' is running on port {}.",
+        daemon_port
+    );
     Ok(())
 }
 
