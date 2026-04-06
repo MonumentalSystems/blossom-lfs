@@ -84,15 +84,25 @@ impl Agent {
                     .await?;
                 }
 
-                // Upload the complete file so it's retrievable by OID
-                let data = tokio::fs::read(&file_path)
+                // Upload the complete file so it's retrievable by OID,
+                // but skip if it already exists on the server
+                let already_exists = client
+                    .exists(&oid)
                     .await
-                    .context("Failed to read file")?;
+                    .unwrap_or(false);
 
-                client
-                    .upload(&data, "application/octet-stream")
-                    .await
-                    .map_err(BlossomLfsError::Blossom)?;
+                if !already_exists {
+                    let data = tokio::fs::read(&file_path)
+                        .await
+                        .context("Failed to read file")?;
+
+                    client
+                        .upload(&data, "application/octet-stream")
+                        .await
+                        .map_err(BlossomLfsError::Blossom)?;
+                } else {
+                    debug!("blob {} already exists on server, skipping upload", oid);
+                }
 
                 send_progress(
                     &sender,
@@ -214,10 +224,20 @@ async fn upload_chunked_file(
 
         let chunk_hash = hash_data(&chunk_data);
 
-        client
-            .upload(&chunk_data, "application/octet-stream")
+        // Skip upload if this chunk already exists on the server
+        let already_exists = client
+            .exists(&chunk_hash)
             .await
-            .map_err(BlossomLfsError::Blossom)?;
+            .unwrap_or(false);
+
+        if !already_exists {
+            client
+                .upload(&chunk_data, "application/octet-stream")
+                .await
+                .map_err(BlossomLfsError::Blossom)?;
+        } else {
+            debug!("chunk {} already exists on server, skipping", chunk_hash);
+        }
 
         chunk_hashes.push(chunk_hash);
         bytes_so_far += chunk.size;
