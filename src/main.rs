@@ -1,5 +1,4 @@
 use base64::Engine;
-use blossom_lfs::Config;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -29,7 +28,7 @@ struct GlobalArgs {
 enum Commands {
     /// Start the LFS daemon (HTTP server for git-lfs operations).
     Daemon {
-        /// Port to listen on (default: from config, or 31921)
+        /// Port to listen on (default: 31921)
         #[arg(long)]
         port: Option<u16>,
     },
@@ -51,9 +50,7 @@ async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Daemon { port } => {
-            let config = Config::from_git_config()
-                .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
-            let daemon_port = port.unwrap_or(config.daemon_port);
+            let daemon_port = port.unwrap_or(31921);
             blossom_lfs::daemon::run_daemon(daemon_port).await
         }
         Commands::Setup => setup(),
@@ -61,8 +58,10 @@ async fn run() -> anyhow::Result<()> {
 }
 
 fn setup() -> anyhow::Result<()> {
-    let config = Config::from_git_config()
-        .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
+    let daemon_port = std::env::var("BLOSSOM_DAEMON_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(31921);
 
     let repo_path = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get current directory: {}", e))?;
@@ -72,10 +71,10 @@ fn setup() -> anyhow::Result<()> {
     let path_str = canonical.to_string_lossy();
 
     let repo_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path_str.as_bytes());
-    let base_url = format!("http://localhost:{}/lfs/{}", config.daemon_port, repo_b64);
+    let base_url = format!("http://localhost:{}/lfs/{}", daemon_port, repo_b64);
 
     std::process::Command::new("git")
-        .args(["config", "lfs.url", &format!("{}/objects/batch", base_url)])
+        .args(["config", "lfs.url", &base_url])
         .status()
         .map_err(|e| anyhow::anyhow!("Failed to run git config: {}", e))?;
 
@@ -103,14 +102,12 @@ fn setup() -> anyhow::Result<()> {
             .ok();
     }
 
-    println!("Configured git-lfs to use blossom-lfs daemon:");
-    println!("  lfs.url        = {}/objects/batch", base_url);
-    println!("  lfs.locksurl   = {}/locks", base_url);
-    println!("  lfs.locksverify = true");
-    println!();
-    println!(
-        "Make sure 'blossom-lfs daemon' is running on port {}.",
-        config.daemon_port
+    tracing::info!(
+        lfs.url = %base_url,
+        lfs.locksurl = %format!("{}/locks", base_url),
+        lfs.locksverify = true,
+        daemon.port = daemon_port,
+        "configured git-lfs to use blossom-lfs daemon"
     );
     Ok(())
 }
