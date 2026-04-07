@@ -1,27 +1,45 @@
 use anyhow::{Context as _, Result};
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use base64::Engine;
-use serde::Deserialize;
+use blossom_rs::auth::Signer;
+use bytes::Bytes;
+use futures_core::Stream;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
-use tracing::{error, info, instrument, warn};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, instrument, warn};
 
-use crate::config::Config;
+use crate::chunking::{Chunker, Manifest};
+use crate::config::{Config, Transport as TransportMode};
 use crate::lock_client::LockClient;
+use crate::transport::Transport;
 
 #[derive(Clone)]
-struct DaemonState {}
+struct DaemonState {
+    port: u16,
+}
 
 pub async fn run_daemon(port: u16) -> Result<()> {
-    let state = DaemonState {};
+    let state = DaemonState { port };
 
     let app = Router::new()
+        .route("/lfs/:repo_b64/objects/batch", post(handle_batch))
+        .route(
+            "/lfs/:repo_b64/objects/:oid",
+            get(handle_download).put(handle_upload),
+        )
+        .route("/lfs/:repo_b64/objects/:oid/verify", post(handle_verify))
         .route(
             "/lfs/:repo_b64/locks",
             post(handle_create_lock).get(handle_list_locks),
@@ -62,20 +80,46 @@ fn decode_repo_path(repo_b64: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn error_json(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "message": msg })),
-    )
+fn make_transport(config: &Config) -> Result<Transport> {
+    let signer = Signer::from_secret_hex(&config.secret_key_hex)
+        .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
+
+    match config.transport {
+        TransportMode::Http => Ok(Transport::http(
+            config.server_url.clone(),
+            signer,
+            std::time::Duration::from_secs(300),
+        )),
+        TransportMode::Iroh => {
+            #[cfg(feature = "iroh")]
+            {
+                let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to create iroh endpoint: {}", e))?;
+                Transport::iroh(endpoint, signer, &config.server_url)
+                    .map_err(|e| anyhow::anyhow!("{}", e))
+            }
+            #[cfg(not(feature = "iroh"))]
+            {
+                anyhow::bail!("iroh transport requested but the 'iroh' feature is not enabled")
+            }
+        }
+    }
+}
+
+fn load_config(repo_path: &std::path::Path) -> Result<Config> {
+    Config::from_repo_path(repo_path)
+}
+
+async fn load_transport(repo_path: &std::path::Path) -> Result<Transport> {
+    let config = load_config(repo_path)?;
+    make_transport(&config)
 }
 
 async fn load_client(repo_path: &std::path::Path) -> Result<(Config, String, LockClient)> {
     let config = Config::from_repo_path(repo_path)?;
-
     let repo_slug = derive_repo_slug(repo_path).await?;
-
     let client = LockClient::new(config.server_url.clone(), config.secret_key_hex.clone());
-
     Ok((config, repo_slug, client))
 }
 
@@ -110,6 +154,463 @@ async fn derive_repo_slug(repo_path: &std::path::Path) -> Result<String> {
     Ok(slug)
 }
 
+fn object_url(port: u16, repo_b64: &str, oid: &str) -> String {
+    format!("http://localhost:{}/lfs/{}/objects/{}", port, repo_b64, oid)
+}
+
+fn error_response(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(serde_json::json!({ "message": msg })))
+}
+
+fn internal_error(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
+    error!(error.message = %msg, "daemon error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "message": msg })),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// LFS Batch API
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Operation {
+    Upload,
+    Download,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchRequest {
+    operation: Operation,
+    #[serde(default)]
+    transfers: Vec<String>,
+    objects: Vec<BatchObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchObject {
+    oid: String,
+    size: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchResponse {
+    transfer: &'static str,
+    objects: Vec<BatchObjectResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchObjectResponse {
+    oid: String,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actions: Option<BatchActions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<BatchError>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchActions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upload: Option<Action>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download: Option<Action>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verify: Option<Action>,
+}
+
+#[derive(Debug, Serialize)]
+struct Action {
+    href: String,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    header: HashMap<String, String>,
+    expires_in: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchError {
+    code: u16,
+    message: String,
+}
+
+#[instrument(name = "daemon.batch", skip_all, fields(repo_b64 = %repo_b64))]
+async fn handle_batch(
+    State(state): State<Arc<DaemonState>>,
+    Path(repo_b64): Path<String>,
+    body: axum::body::Bytes,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let req: BatchRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid batch request: {}", e),
+            )
+        }
+    };
+    let repo_path = match decode_repo_path(&repo_b64) {
+        Ok(p) => p,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+
+    let config = match load_config(&repo_path) {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let _chunk_size = config.chunk_size;
+
+    let objects: Vec<BatchObjectResponse> = req
+        .objects
+        .into_iter()
+        .map(|obj| {
+            let url = object_url(state.port, &repo_b64, &obj.oid);
+            let verify_url = format!("{}/verify", url);
+
+            let (actions, error) = match &req.operation {
+                Operation::Upload => (
+                    Some(BatchActions {
+                        upload: Some(Action {
+                            href: url,
+                            header: HashMap::new(),
+                            expires_in: Some(3600),
+                        }),
+                        download: None,
+                        verify: Some(Action {
+                            href: verify_url,
+                            header: HashMap::new(),
+                            expires_in: Some(3600),
+                        }),
+                    }),
+                    None,
+                ),
+                Operation::Download => (
+                    Some(BatchActions {
+                        upload: None,
+                        download: Some(Action {
+                            href: url,
+                            header: HashMap::new(),
+                            expires_in: Some(3600),
+                        }),
+                        verify: None,
+                    }),
+                    None,
+                ),
+            };
+
+            BatchObjectResponse {
+                oid: obj.oid,
+                size: obj.size,
+                actions,
+                error,
+            }
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(
+            serde_json::to_value(BatchResponse {
+                transfer: "basic",
+                objects,
+            })
+            .unwrap_or_default(),
+        ),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Download
+// ---------------------------------------------------------------------------
+
+#[instrument(name = "daemon.download", skip_all, fields(oid = %oid))]
+async fn handle_download(
+    State(_state): State<Arc<DaemonState>>,
+    Path((repo_b64, oid)): Path<(String, String)>,
+) -> axum::response::Response {
+    let repo_path = match decode_repo_path(&repo_b64) {
+        Ok(p) => p,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()).into_response(),
+    };
+
+    let transport = match load_transport(&repo_path).await {
+        Ok(t) => t,
+        Err(e) => {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+                .into_response()
+        }
+    };
+
+    let blob_data = match transport.download(&oid).await {
+        Ok(d) => d,
+        Err(e) => return error_response(StatusCode::NOT_FOUND, &e.to_string()).into_response(),
+    };
+
+    let manifest_result = std::str::from_utf8(&blob_data)
+        .ok()
+        .and_then(|s| Manifest::from_json(s).ok());
+
+    if let Some(manifest) = manifest_result {
+        match manifest.verify() {
+            Ok(true) => {}
+            _ => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "merkle verification failed",
+                )
+                .into_response()
+            }
+        }
+
+        let file_size = manifest.file_size;
+
+        if manifest.chunks == 1 {
+            let chunk_data = match transport.download(&manifest.chunk_hashes[0]).await {
+                Ok(d) => d,
+                Err(e) => {
+                    return error_response(StatusCode::NOT_FOUND, &e.to_string()).into_response()
+                }
+            };
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                    (header::CONTENT_LENGTH, file_size.to_string()),
+                ],
+                Body::from(chunk_data),
+            )
+                .into_response();
+        }
+
+        let stream = chunk_download_stream(transport, manifest);
+        let body = Body::from_stream(stream);
+
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_LENGTH, file_size.to_string()),
+            ],
+            body,
+        )
+            .into_response();
+    }
+
+    let content_length = blob_data.len().to_string();
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, content_length),
+        ],
+        Body::from(blob_data),
+    )
+        .into_response()
+}
+
+fn chunk_download_stream(
+    transport: Transport,
+    manifest: Manifest,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::convert::Infallible>> + Send>> {
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::convert::Infallible>>(4);
+
+    tokio::spawn(async move {
+        for chunk_info in manifest.all_chunk_info().unwrap_or_default() {
+            match transport.download(&chunk_info.hash).await {
+                Ok(data) => {
+                    debug!(chunk.sha256 = %chunk_info.hash, chunk.size = data.len(), "chunk downloaded for stream");
+                    if tx.send(Ok(Bytes::from(data))).await.is_err() {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = tx.send(Ok(Bytes::new())).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+// ---------------------------------------------------------------------------
+// Upload
+// ---------------------------------------------------------------------------
+
+#[instrument(name = "daemon.upload", skip_all, fields(oid = %oid))]
+async fn handle_upload(
+    State(_state): State<Arc<DaemonState>>,
+    Path((repo_b64, oid)): Path<(String, String)>,
+    body: Body,
+) -> impl IntoResponse {
+    let repo_path = match decode_repo_path(&repo_b64) {
+        Ok(p) => p,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+
+    let config = match load_config(&repo_path) {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let transport = match make_transport(&config) {
+        Ok(t) => t,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let chunker = match Chunker::new(config.chunk_size) {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    let tmp_dir = repo_path.join(".blossom-lfs-tmp");
+    tokio::fs::create_dir_all(&tmp_dir).await.ok();
+    let tmp_file = tmp_dir.join(format!("upload-{}", &oid[..16]));
+
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&tmp_file)
+            .await
+            .map_err(|e| {
+                error!(error.message = %e, "failed to create temp file");
+                std::io::Error::other(e)
+            })
+            .unwrap();
+
+        let mut stream = body.into_data_stream();
+        use tokio_stream::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap_or_default();
+            if let Err(e) = file.write_all(&chunk).await {
+                tokio::fs::remove_file(&tmp_file).await.ok();
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+            }
+        }
+        file.flush().await.ok();
+    }
+
+    let metadata = match tokio::fs::metadata(&tmp_file).await {
+        Ok(m) => m,
+        Err(e) => {
+            tokio::fs::remove_file(&tmp_file).await.ok();
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+    };
+    let file_size = metadata.len();
+    let file_path = &tmp_file;
+
+    if chunker.should_chunk(file_size) {
+        match upload_chunked(&transport, &chunker, file_path, file_size).await {
+            Ok(_) => {}
+            Err(e) => {
+                tokio::fs::remove_file(&tmp_file).await.ok();
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+            }
+        }
+    }
+
+    let already_exists = transport.exists(&oid).await.unwrap_or(false);
+    if !already_exists {
+        if let Err(e) = transport
+            .upload_file(file_path, "application/octet-stream")
+            .await
+        {
+            tokio::fs::remove_file(&tmp_file).await.ok();
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+        info!(blob.oid = %oid, blob.size = file_size, "blob uploaded");
+    } else {
+        info!(blob.oid = %oid, "blob already exists, skipped upload");
+    }
+
+    tokio::fs::remove_file(&tmp_file).await.ok();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "oid": oid, "size": file_size })),
+    )
+}
+
+async fn upload_chunked(
+    transport: &Transport,
+    chunker: &Chunker,
+    file_path: &std::path::Path,
+    file_size: u64,
+) -> Result<()> {
+    let (chunks, _) = chunker.chunk_file(file_path).await?;
+
+    let mut chunk_hashes = Vec::new();
+    for chunk in &chunks {
+        let chunk_data = chunker
+            .read_chunk(file_path, chunk.offset, chunk.size)
+            .await?;
+        let chunk_hash = hex::encode(Sha256::digest(&chunk_data));
+
+        let already_exists = transport.exists(&chunk_hash).await.unwrap_or(false);
+        if !already_exists {
+            transport
+                .upload(&chunk_data, "application/octet-stream")
+                .await?;
+            debug!(chunk.sha256 = %chunk_hash, chunk.size = chunk.size, "chunk uploaded");
+        }
+
+        chunk_hashes.push(chunk_hash);
+    }
+
+    let manifest = Manifest::new(
+        file_size,
+        chunker.chunk_size(),
+        chunk_hashes,
+        file_path.file_name().map(|n| n.to_string_lossy().into()),
+        Some("application/octet-stream".to_string()),
+        None,
+    )?;
+
+    let manifest_json = manifest.to_json()?;
+    transport
+        .upload(manifest_json.as_bytes(), "application/json")
+        .await?;
+    debug!(manifest.merkle_root = %manifest.merkle_root, "manifest uploaded");
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Verify
+// ---------------------------------------------------------------------------
+
+#[instrument(name = "daemon.verify", skip_all, fields(oid = %oid))]
+async fn handle_verify(
+    State(_state): State<Arc<DaemonState>>,
+    Path((repo_b64, oid)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let repo_path = match decode_repo_path(&repo_b64) {
+        Ok(p) => p,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+
+    let transport = match load_transport(&repo_path).await {
+        Ok(t) => t,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+
+    match transport.exists(&oid).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "oid": oid, "ok": true })),
+        ),
+        Ok(false) => error_response(StatusCode::NOT_FOUND, &format!("object {} not found", oid)),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lock handlers (unchanged from v0.3.x)
+// ---------------------------------------------------------------------------
+
 #[instrument(name = "daemon.locks.create", skip_all, fields(repo_b64 = %repo_b64))]
 async fn handle_create_lock(
     State(_state): State<Arc<DaemonState>>,
@@ -118,17 +619,12 @@ async fn handle_create_lock(
 ) -> impl IntoResponse {
     let repo_path = match decode_repo_path(&repo_b64) {
         Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "message": e.to_string() })),
-            );
-        }
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     let (_, slug, client) = match load_client(&repo_path).await {
         Ok(v) => v,
-        Err(e) => return error_json(&e.to_string()),
+        Err(e) => return internal_error(&e.to_string()),
     };
 
     #[derive(Deserialize)]
@@ -139,10 +635,7 @@ async fn handle_create_lock(
     let req: CreateReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "message": format!("invalid request: {}", e) })),
-            );
+            return error_response(StatusCode::BAD_REQUEST, &format!("invalid request: {}", e))
         }
     };
 
@@ -154,13 +647,9 @@ async fn handle_create_lock(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("already locked") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({ "message": msg })),
-                )
+                error_response(StatusCode::CONFLICT, &msg)
             } else {
-                error!(error.message = %msg, "lock create failed");
-                error_json(&msg)
+                internal_error(&msg)
             }
         }
     }
@@ -174,17 +663,12 @@ async fn handle_list_locks(
 ) -> impl IntoResponse {
     let repo_path = match decode_repo_path(&repo_b64) {
         Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "message": e.to_string() })),
-            );
-        }
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     let (_, slug, client) = match load_client(&repo_path).await {
         Ok(v) => v,
-        Err(e) => return error_json(&e.to_string()),
+        Err(e) => return internal_error(&e.to_string()),
     };
 
     match client
@@ -203,10 +687,7 @@ async fn handle_list_locks(
             }
             (StatusCode::OK, Json(resp))
         }
-        Err(e) => {
-            error!(error.message = %e, "lock list failed");
-            error_json(&e.to_string())
-        }
+        Err(e) => internal_error(&e.to_string()),
     }
 }
 
@@ -218,17 +699,12 @@ async fn handle_verify_locks(
 ) -> impl IntoResponse {
     let repo_path = match decode_repo_path(&repo_b64) {
         Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "message": e.to_string() })),
-            );
-        }
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     let (_, slug, client) = match load_client(&repo_path).await {
         Ok(v) => v,
-        Err(e) => return error_json(&e.to_string()),
+        Err(e) => return internal_error(&e.to_string()),
     };
 
     #[derive(Deserialize, Default)]
@@ -250,10 +726,7 @@ async fn handle_verify_locks(
             }
             (StatusCode::OK, Json(resp))
         }
-        Err(e) => {
-            error!(error.message = %e, "lock verify failed");
-            error_json(&e.to_string())
-        }
+        Err(e) => internal_error(&e.to_string()),
     }
 }
 
@@ -265,17 +738,12 @@ async fn handle_unlock(
 ) -> impl IntoResponse {
     let repo_path = match decode_repo_path(&repo_b64) {
         Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "message": e.to_string() })),
-            );
-        }
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
     let (_, slug, client) = match load_client(&repo_path).await {
         Ok(v) => v,
-        Err(e) => return error_json(&e.to_string()),
+        Err(e) => return internal_error(&e.to_string()),
     };
 
     #[derive(Deserialize, Default)]
@@ -291,18 +759,11 @@ async fn handle_unlock(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({ "message": msg })),
-                )
+                error_response(StatusCode::NOT_FOUND, &msg)
             } else if msg.contains("forbidden") || msg.contains("owner") {
-                (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({ "message": msg })),
-                )
+                error_response(StatusCode::FORBIDDEN, &msg)
             } else {
-                error!(error.message = %msg, "unlock failed");
-                error_json(&msg)
+                internal_error(&msg)
             }
         }
     }

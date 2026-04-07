@@ -44,6 +44,10 @@ impl Chunker {
         Ok(Self { chunk_size })
     }
 
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
     /// Read `path` and split it into chunks, returning the chunk list and total file size.
     pub async fn chunk_file(&self, path: &Path) -> Result<(Vec<Chunk>, u64)> {
         let mut file = File::open(path).await?;
