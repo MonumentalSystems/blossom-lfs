@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::chunking::{Chunker, Manifest};
-use crate::config::{Config, Transport as TransportMode};
+use crate::config::{Config, ForceTransport};
 use crate::lock_client::LockClient;
 use crate::transport::Transport;
 
@@ -84,27 +84,55 @@ fn make_transport(config: &Config) -> Result<Transport> {
     let signer = Signer::from_secret_hex(&config.secret_key_hex)
         .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
 
-    match config.transport {
-        TransportMode::Http => Ok(Transport::http(
-            config.server_url.clone(),
-            signer,
-            std::time::Duration::from_secs(300),
-        )),
-        TransportMode::Iroh => {
+    let mut transport = match config.iroh_endpoint {
+        Some(ref _endpoint_id) => {
             #[cfg(feature = "iroh")]
             {
                 let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
                     .await
                     .map_err(|e| anyhow::anyhow!("failed to create iroh endpoint: {}", e))?;
-                Transport::iroh(endpoint, signer, &config.server_url)
-                    .map_err(|e| anyhow::anyhow!("{}", e))
+                let eid: iroh::EndpointId = endpoint_id
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("invalid iroh endpoint ID: {}", e))?;
+                let iroh_client =
+                    blossom_rs::transport::IrohBlossomClient::new(endpoint, signer.clone());
+                let peer = iroh::EndpointAddr::from(eid);
+                Transport::multi(
+                    config.server_url.clone(),
+                    signer.clone(),
+                    std::time::Duration::from_secs(300),
+                    iroh_client,
+                    peer,
+                )
             }
             #[cfg(not(feature = "iroh"))]
             {
-                anyhow::bail!("iroh transport requested but the 'iroh' feature is not enabled")
+                Transport::http_only(
+                    config.server_url.clone(),
+                    signer.clone(),
+                    std::time::Duration::from_secs(300),
+                )
             }
         }
+        None => Transport::http_only(
+            config.server_url.clone(),
+            signer.clone(),
+            std::time::Duration::from_secs(300),
+        ),
+    };
+
+    match config.force_transport {
+        Some(ForceTransport::Http) => transport = transport.force_http(),
+        Some(ForceTransport::Iroh) => {
+            #[cfg(feature = "iroh")]
+            {
+                transport = transport.force_iroh();
+            }
+        }
+        None => {}
     }
+
+    Ok(transport)
 }
 
 fn load_config(repo_path: &std::path::Path) -> Result<Config> {

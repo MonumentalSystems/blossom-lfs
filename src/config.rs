@@ -18,21 +18,15 @@ const DEFAULT_CONCURRENT_UPLOADS: usize = 8;
 const DEFAULT_CONCURRENT_DOWNLOADS: usize = 8;
 const DEFAULT_DAEMON_PORT: u16 = 31921;
 
-/// Which transport to use for blob operations.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum Transport {
-    /// Standard HTTPS (default).
-    #[default]
-    Http,
-    /// iroh QUIC peer-to-peer transport (requires `iroh` feature).
-    Iroh,
-}
-
 /// Runtime configuration for the LFS agent.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Base URL of the Blossom server (for HTTP) or iroh node ID (for iroh).
+    /// HTTP URL of the Blossom server.
     pub server_url: String,
+    /// Optional iroh endpoint ID (base32-encoded). When set alongside
+    /// `server_url`, the daemon uses iroh for uploads and HTTP for downloads
+    /// with automatic fallback.
+    pub iroh_endpoint: Option<String>,
     /// Nostr private key as a 64-character hex string.
     pub secret_key_hex: String,
     /// Maximum bytes per chunk (default 16 MiB).
@@ -41,10 +35,20 @@ pub struct Config {
     pub max_concurrent_uploads: usize,
     /// Maximum number of concurrent chunk downloads.
     pub max_concurrent_downloads: usize,
-    /// Transport mode: `http` (default) or `iroh`.
-    pub transport: Transport,
+    /// Force all operations through a single transport.
+    /// Without this, iroh is preferred for uploads and HTTP for downloads.
+    pub force_transport: Option<ForceTransport>,
     /// Daemon port for lock proxy (default 31921).
     pub daemon_port: u16,
+}
+
+/// Force a specific transport for all operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForceTransport {
+    /// Force all operations through HTTP.
+    Http,
+    /// Force all operations through iroh.
+    Iroh,
 }
 
 impl Config {
@@ -97,11 +101,12 @@ impl Config {
 
     fn parse_config(content: &str) -> Result<Self> {
         let mut server_url = None;
+        let mut iroh_endpoint = None;
         let mut private_key_str = None;
         let mut chunk_size = DEFAULT_CHUNK_SIZE;
         let mut max_concurrent_uploads = DEFAULT_CONCURRENT_UPLOADS;
         let mut max_concurrent_downloads = DEFAULT_CONCURRENT_DOWNLOADS;
-        let mut transport = Transport::default();
+        let mut force_transport: Option<ForceTransport> = None;
         let mut daemon_port = DEFAULT_DAEMON_PORT;
 
         for line in content.lines() {
@@ -116,6 +121,9 @@ impl Config {
 
                 match key {
                     "server" => server_url = Some(value.to_string()),
+                    "iroh-endpoint" | "irohEndpoint" => {
+                        iroh_endpoint = Some(value.to_string());
+                    }
                     "private-key" | "privateKey" => private_key_str = Some(value.to_string()),
                     "chunk-size" | "chunkSize" => {
                         if let Ok(v) = value.parse() {
@@ -133,7 +141,16 @@ impl Config {
                         }
                     }
                     "transport" => {
-                        transport = parse_transport(value);
+                        let v = value.trim().to_lowercase();
+                        match v.as_str() {
+                            "iroh" | "quic" => {
+                                force_transport = Some(ForceTransport::Iroh);
+                            }
+                            "http" | "https" => {
+                                force_transport = Some(ForceTransport::Http);
+                            }
+                            _ => {}
+                        }
                     }
                     "daemon-port" | "daemonPort" => {
                         if let Ok(v) = value.parse() {
@@ -156,11 +173,12 @@ impl Config {
 
         Ok(Config {
             server_url,
+            iroh_endpoint,
             secret_key_hex,
             chunk_size,
             max_concurrent_uploads,
             max_concurrent_downloads,
-            transport,
+            force_transport,
             daemon_port,
         })
     }
@@ -174,9 +192,15 @@ impl Config {
 
         let secret_key_hex = normalize_to_hex(&private_key_str)?;
 
-        let transport = std::env::var("BLOSSOM_TRANSPORT")
-            .map(|v| parse_transport(&v))
-            .unwrap_or_default();
+        let iroh_endpoint = std::env::var("BLOSSOM_IROH_ENDPOINT").ok();
+
+        let force_transport = std::env::var("BLOSSOM_TRANSPORT").ok().and_then(|v| {
+            match v.trim().to_lowercase().as_str() {
+                "iroh" | "quic" => Some(ForceTransport::Iroh),
+                "http" | "https" => Some(ForceTransport::Http),
+                _ => None,
+            }
+        });
 
         let daemon_port = std::env::var("BLOSSOM_DAEMON_PORT")
             .ok()
@@ -185,24 +209,17 @@ impl Config {
 
         Ok(Config {
             server_url,
+            iroh_endpoint,
             secret_key_hex,
             chunk_size: DEFAULT_CHUNK_SIZE,
             max_concurrent_uploads: DEFAULT_CONCURRENT_UPLOADS,
             max_concurrent_downloads: DEFAULT_CONCURRENT_DOWNLOADS,
-            transport,
+            force_transport,
             daemon_port,
         })
     }
 }
 
-fn parse_transport(value: &str) -> Transport {
-    match value.trim().to_lowercase().as_str() {
-        "iroh" | "quic" => Transport::Iroh,
-        _ => Transport::Http,
-    }
-}
-
-/// Convert nsec or hex private key string to hex.
 fn normalize_to_hex(key: &str) -> Result<String> {
     let key = key.trim();
 
@@ -230,11 +247,39 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_transport() {
-        assert_eq!(parse_transport("http"), Transport::Http);
-        assert_eq!(parse_transport("iroh"), Transport::Iroh);
-        assert_eq!(parse_transport("quic"), Transport::Iroh);
-        assert_eq!(parse_transport("IROH"), Transport::Iroh);
-        assert_eq!(parse_transport("anything_else"), Transport::Http);
+    fn test_parse_config_with_iroh_endpoint() {
+        let config = Config::parse_config(
+            "server=https://blossom.example.com\n\
+             iroh-endpoint=abc123def456\n\
+             private-key=0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        assert_eq!(config.server_url, "https://blossom.example.com");
+        assert_eq!(config.iroh_endpoint.as_deref(), Some("abc123def456"));
+        assert!(config.force_transport.is_none());
+    }
+
+    #[test]
+    fn test_parse_config_transport_iroh_legacy() {
+        let config = Config::parse_config(
+            "server=https://blossom.example.com\n\
+             transport=iroh\n\
+             private-key=0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        assert_eq!(config.force_transport, Some(ForceTransport::Iroh));
+        assert_eq!(config.server_url, "https://blossom.example.com");
+    }
+
+    #[test]
+    fn test_parse_config_force_http() {
+        let config = Config::parse_config(
+            "server=https://blossom.example.com\n\
+             iroh-endpoint=abc123\n\
+             transport=http\n\
+             private-key=0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        assert_eq!(config.force_transport, Some(ForceTransport::Http));
     }
 }

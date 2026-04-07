@@ -116,25 +116,45 @@ git lfs (vanilla) → HTTP → localhost:31921/lfs/<b64>/{objects,locks}
 server=https://your-blossom-server.com
 private-key=nsec1...           # Nostr private key (nsec or hex)
 chunk-size=16777216            # 16 MB (optional, default)
-transport=http                 # http (default) or iroh
 daemon-port=31921              # (optional, default)
+
+# Optional: iroh QUIC for uploads, HTTP for downloads (with fallback)
+iroh-endpoint=<iroh-endpoint-id>
+
+# Optional: force single transport
+# transport=http               # force all ops through HTTP
+# transport=iroh               # force all ops through iroh
 ```
+
+When both `server` and `iroh-endpoint` are set, the daemon uses iroh for
+uploads (direct P2P) and HTTP for downloads (CDN caching), with automatic
+fallback on failure.
 
 ### Environment Variables
 
 ```bash
-BLOSSOM_SERVER_URL     # Blossom server URL
-NOSTR_PRIVATE_KEY      # Nostr private key
-BLOSSOM_TRANSPORT      # http or iroh
-BLOSSOM_DAEMON_PORT    # daemon listen port (default 31921)
+BLOSSOM_SERVER_URL       # Blossom server URL (required)
+BLOSSOM_IROH_ENDPOINT    # iroh endpoint ID (optional)
+NOSTR_PRIVATE_KEY        # Nostr private key
+BLOSSOM_TRANSPORT        # force 'http' or 'iroh' (optional)
+BLOSSOM_DAEMON_PORT      # daemon listen port (default 31921)
 ```
 
 ### iroh QUIC Transport
 
+For peer-to-peer uploads with HTTP downloads:
+
 ```ini
-server=<iroh-endpoint-id>      # base32-encoded iroh endpoint ID
-transport=iroh
+server=https://your-blossom-server.com
+iroh-endpoint=<iroh-endpoint-id>      # base32-encoded iroh endpoint ID
 private-key=nsec1...
+```
+
+Or force iroh-only mode:
+```ini
+server=https://your-blossom-server.com
+iroh-endpoint=<iroh-endpoint-id>
+transport=iroh
 ```
 
 ## Logging

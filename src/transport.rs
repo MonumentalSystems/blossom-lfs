@@ -1,132 +1,100 @@
-//! Pluggable transport layer for blob operations.
+//! Transport layer wrapping blossom-rs [`MultiTransportClient`].
 //!
-//! [`Transport`] wraps the blossom-rs [`BlobClient`] trait, dispatching to
-//! either the HTTP [`BlossomClient`] or the iroh QUIC
-//! [`IrohBlossomClient`] depending on the configured transport mode.
-//!
-//! Each variant stores both the client and its address (the `BlobClient`
-//! associated type): `()` for HTTP, `EndpointAddr` for iroh.
+//! When both HTTP and iroh endpoints are configured, the daemon uses iroh for
+//! uploads (direct P2P) and HTTP for downloads (CDN caching), with automatic
+//! fallback. Set `transport = http` or `transport = iroh` to force one mode.
 //!
 //! ## Configuration
 //!
 //! In `.lfsdalconfig`:
 //!
 //! ```ini
-//! server = https://blossom.example.com   # HTTP (default)
-//! # — or —
-//!     server = <iroh-endpoint-id>            # iroh QUIC
-//!     transport = iroh
+//! server = https://blossom.example.com       # HTTP (required)
+//! iroh-endpoint = <iroh-endpoint-id>          # iroh QUIC (optional)
+//! # transport = http                          # force HTTP for all ops (optional)
 //! ```
 
 use crate::error::{BlossomLfsError, Result};
-use blossom_rs::{protocol::BlobDescriptor, BlobClient};
+use blossom_rs::protocol::BlobDescriptor;
+use blossom_rs::BlobClient;
 
-/// Transport wrapping either HTTP or iroh QUIC blob operations.
-///
-/// Uses the [`BlobClient`] trait from blossom-rs for a unified interface.
-/// HTTP uses `Address = ()` (server list is internal to the client),
-/// iroh uses `Address = EndpointAddr` (stored here alongside the client).
-pub enum Transport {
-    /// Standard HTTPS via [`blossom_rs::BlossomClient`].
-    Http(blossom_rs::BlossomClient),
-
-    /// iroh QUIC via [`blossom_rs::transport::IrohBlossomClient`].
-    #[cfg(feature = "iroh")]
-    Iroh {
-        client: blossom_rs::transport::IrohBlossomClient,
-        peer: iroh::EndpointAddr,
-    },
+pub struct Transport {
+    client: blossom_rs::MultiTransportClient,
 }
 
 impl Transport {
-    /// Create an HTTP transport.
-    pub fn http(
+    /// Create an HTTP-only transport.
+    pub fn http_only(
         server_url: String,
         signer: impl blossom_rs::auth::BlossomSigner + 'static,
         timeout: std::time::Duration,
     ) -> Self {
-        Self::Http(blossom_rs::BlossomClient::with_timeout(
-            vec![server_url],
-            signer,
-            timeout,
-        ))
+        let http = blossom_rs::BlossomClient::with_timeout(vec![server_url], signer, timeout);
+        Self {
+            client: blossom_rs::MultiTransportClient::http_only(http),
+        }
     }
 
-    /// Create an iroh QUIC transport.
-    ///
-    /// `endpoint_id` is the remote peer's base32-encoded iroh endpoint ID.
+    /// Create a dual-transport client (iroh for uploads, HTTP for downloads).
     #[cfg(feature = "iroh")]
-    pub fn iroh(
-        endpoint: iroh::endpoint::Endpoint,
+    pub fn multi(
+        server_url: String,
         signer: impl blossom_rs::auth::BlossomSigner + 'static,
-        endpoint_id: &str,
-    ) -> std::result::Result<Self, String> {
-        let eid: iroh::EndpointId = endpoint_id
-            .parse()
-            .map_err(|e| format!("invalid iroh endpoint ID '{}': {}", endpoint_id, e))?;
-
-        Ok(Self::Iroh {
-            client: blossom_rs::transport::IrohBlossomClient::new(endpoint, signer),
-            peer: iroh::EndpointAddr::from(eid),
-        })
+        timeout: std::time::Duration,
+        iroh_client: blossom_rs::transport::IrohBlossomClient,
+        iroh_peer: iroh::EndpointAddr,
+    ) -> Self {
+        let http = blossom_rs::BlossomClient::with_timeout(vec![server_url], signer, timeout);
+        Self {
+            client: blossom_rs::MultiTransportClient::new(http, iroh_client, iroh_peer),
+        }
     }
 
-    /// Upload a blob via the [`BlobClient`] trait.
+    /// Force all operations through HTTP.
+    pub fn force_http(mut self) -> Self {
+        self.client = self.client.force_http();
+        self
+    }
+
+    /// Force all operations through iroh.
+    #[cfg(feature = "iroh")]
+    pub fn force_iroh(mut self) -> Self {
+        self.client = self.client.iroh_only();
+        self
+    }
+
     pub async fn upload(&self, data: &[u8], content_type: &str) -> Result<BlobDescriptor> {
-        match self {
-            Self::Http(c) => BlobClient::upload(c, &(), data, content_type).await,
-            #[cfg(feature = "iroh")]
-            Self::Iroh { client, peer } => {
-                BlobClient::upload(client, peer, data, content_type).await
-            }
-        }
-        .map_err(BlossomLfsError::Blossom)
+        self.client
+            .upload(&(), data, content_type)
+            .await
+            .map_err(BlossomLfsError::Blossom)
     }
 
-    /// Download a blob by SHA-256 hex hash via the [`BlobClient`] trait.
     pub async fn download(&self, sha256: &str) -> Result<Vec<u8>> {
-        match self {
-            Self::Http(c) => BlobClient::download(c, &(), sha256).await,
-            #[cfg(feature = "iroh")]
-            Self::Iroh { client, peer } => BlobClient::download(client, peer, sha256).await,
-        }
-        .map_err(BlossomLfsError::Blossom)
+        self.client
+            .download(&(), sha256)
+            .await
+            .map_err(BlossomLfsError::Blossom)
     }
 
-    /// Check whether a blob exists via the [`BlobClient`] trait.
     pub async fn exists(&self, sha256: &str) -> Result<bool> {
-        match self {
-            Self::Http(c) => BlobClient::exists(c, &(), sha256).await,
-            #[cfg(feature = "iroh")]
-            Self::Iroh { client, peer } => BlobClient::exists(client, peer, sha256).await,
-        }
-        .map_err(BlossomLfsError::Blossom)
+        self.client
+            .exists(&(), sha256)
+            .await
+            .map_err(BlossomLfsError::Blossom)
     }
 
-    /// Upload a file by path without buffering it in memory.
-    ///
-    /// Two-pass approach: first pass computes SHA-256 (streaming), second
-    /// pass streams the file to the server. Handles 600GB+ files with
-    /// constant memory.
     pub async fn upload_file(
         &self,
         path: &std::path::Path,
         content_type: &str,
     ) -> Result<BlobDescriptor> {
-        match self {
-            Self::Http(c) => BlobClient::upload_file(c, &(), path, content_type).await,
-            #[cfg(feature = "iroh")]
-            Self::Iroh { client, peer } => {
-                BlobClient::upload_file(client, peer, path, content_type).await
-            }
-        }
-        .map_err(BlossomLfsError::Blossom)
+        self.client
+            .upload_file(&(), path, content_type)
+            .await
+            .map_err(BlossomLfsError::Blossom)
     }
 
-    /// Upload a blob with LFS context tags (BUD-20).
-    ///
-    /// Sends `["t","lfs"]`, `["path",...]`, `["repo",...]`, and optionally
-    /// `["base",...]` and `["manifest"]` tags in the auth event.
     pub async fn upload_lfs(
         &self,
         data: &[u8],
@@ -136,17 +104,10 @@ impl Transport {
         base_sha256: Option<&str>,
         is_manifest: bool,
     ) -> Result<BlobDescriptor> {
-        match self {
-            Self::Http(c) => {
-                c.upload_lfs(data, content_type, path, repo, base_sha256, is_manifest)
-                    .await
-            }
-            #[cfg(feature = "iroh")]
-            Self::Iroh { .. } => {
-                // iroh transport doesn't support LFS tags yet; fall back to regular upload
-                self.upload(data, content_type).await
-            }
-        }
-        .map_err(BlossomLfsError::Blossom)
+        self.client
+            .http()
+            .upload_lfs(data, content_type, path, repo, base_sha256, is_manifest)
+            .await
+            .map_err(BlossomLfsError::Blossom)
     }
 }
