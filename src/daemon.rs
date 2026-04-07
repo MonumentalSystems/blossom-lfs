@@ -22,7 +22,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::chunking::{Chunker, Manifest};
 use crate::config::{Config, ForceTransport};
-use crate::lock_client::LockClient;
+use crate::lock_client::{LockClient, LockTransport};
 use crate::transport::Transport;
 
 #[derive(Clone)]
@@ -80,9 +80,14 @@ fn decode_repo_path(repo_b64: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn make_transport(config: &Config) -> Result<Transport> {
+async fn make_transport(config: &Config) -> Result<Transport> {
     let signer = Signer::from_secret_hex(&config.secret_key_hex)
         .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
+
+    let server_url = config
+        .server_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:0".to_string());
 
     let mut transport = match config.iroh_endpoint {
         Some(ref _endpoint_id) => {
@@ -91,14 +96,14 @@ fn make_transport(config: &Config) -> Result<Transport> {
                 let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
                     .await
                     .map_err(|e| anyhow::anyhow!("failed to create iroh endpoint: {}", e))?;
-                let eid: iroh::EndpointId = endpoint_id
+                let eid: iroh::EndpointId = _endpoint_id
                     .parse()
                     .map_err(|e| anyhow::anyhow!("invalid iroh endpoint ID: {}", e))?;
                 let iroh_client =
                     blossom_rs::transport::IrohBlossomClient::new(endpoint, signer.clone());
                 let peer = iroh::EndpointAddr::from(eid);
                 Transport::multi(
-                    config.server_url.clone(),
+                    server_url,
                     signer.clone(),
                     std::time::Duration::from_secs(300),
                     iroh_client,
@@ -108,14 +113,14 @@ fn make_transport(config: &Config) -> Result<Transport> {
             #[cfg(not(feature = "iroh"))]
             {
                 Transport::http_only(
-                    config.server_url.clone(),
+                    server_url,
                     signer.clone(),
                     std::time::Duration::from_secs(300),
                 )
             }
         }
         None => Transport::http_only(
-            config.server_url.clone(),
+            server_url,
             signer.clone(),
             std::time::Duration::from_secs(300),
         ),
@@ -141,14 +146,53 @@ fn load_config(repo_path: &std::path::Path) -> Result<Config> {
 
 async fn load_transport(repo_path: &std::path::Path) -> Result<Transport> {
     let config = load_config(repo_path)?;
-    make_transport(&config)
+    make_transport(&config).await
 }
 
-async fn load_client(repo_path: &std::path::Path) -> Result<(Config, String, LockClient)> {
+async fn load_client(repo_path: &std::path::Path) -> Result<(Config, String, LockTransport)> {
     let config = Config::from_repo_path(repo_path)?;
     let repo_slug = derive_repo_slug(repo_path).await?;
-    let client = LockClient::new(config.server_url.clone(), config.secret_key_hex.clone());
-    Ok((config, repo_slug, client))
+    let lock_transport = make_lock_transport(&config).await?;
+    Ok((config, repo_slug, lock_transport))
+}
+
+async fn make_lock_transport(config: &Config) -> Result<LockTransport> {
+    let use_iroh =
+        config.force_transport == Some(ForceTransport::Iroh) && config.iroh_endpoint.is_some();
+
+    if use_iroh {
+        #[cfg(feature = "iroh")]
+        {
+            let signer = Signer::from_secret_hex(&config.secret_key_hex)
+                .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
+            let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to create iroh endpoint: {}", e))?;
+            let endpoint_id = config.iroh_endpoint.as_deref().unwrap();
+            let eid: iroh::EndpointId = endpoint_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid iroh endpoint ID: {}", e))?;
+            let iroh_client = blossom_rs::transport::IrohBlossomClient::new(endpoint, signer);
+            let addr = iroh::EndpointAddr::from(eid);
+            return Ok(LockTransport::Iroh {
+                client: iroh_client,
+                addr,
+            });
+        }
+        #[cfg(not(feature = "iroh"))]
+        {
+            anyhow::bail!("iroh transport requested but iroh feature not enabled");
+        }
+    }
+
+    let server_url = config
+        .server_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No server URL configured and iroh not enabled"))?;
+    Ok(LockTransport::Http(LockClient::new(
+        server_url.clone(),
+        config.secret_key_hex.clone(),
+    )))
 }
 
 async fn derive_repo_slug(repo_path: &std::path::Path) -> Result<String> {
@@ -485,7 +529,7 @@ async fn handle_upload(
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    let transport = match make_transport(&config) {
+    let transport = match make_transport(&config).await {
         Ok(t) => t,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };

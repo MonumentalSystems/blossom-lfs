@@ -223,3 +223,96 @@ impl LockClient {
         }
     }
 }
+
+#[cfg(feature = "iroh")]
+fn lock_record_to_lfs_lock(record: blossom_rs::locks::LockRecord) -> LfsLock {
+    LfsLock {
+        id: record.id,
+        path: record.path,
+        locked_at: format!("{}Z", record.locked_at),
+        owner: LfsOwner {
+            name: record.pubkey,
+        },
+    }
+}
+
+pub enum LockTransport {
+    Http(LockClient),
+    #[cfg(feature = "iroh")]
+    Iroh {
+        client: blossom_rs::transport::IrohBlossomClient,
+        addr: iroh::EndpointAddr,
+    },
+}
+
+impl LockTransport {
+    pub async fn create_lock(&self, repo_slug: &str, path: &str) -> Result<LfsLock> {
+        match self {
+            LockTransport::Http(client) => client.create_lock(repo_slug, path).await,
+            #[cfg(feature = "iroh")]
+            LockTransport::Iroh { client, addr } => {
+                let record = client
+                    .create_lock(addr, repo_slug, path)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("iroh create_lock failed: {}", e))?;
+                Ok(lock_record_to_lfs_lock(record))
+            }
+        }
+    }
+
+    pub async fn unlock(&self, repo_slug: &str, lock_id: &str, force: bool) -> Result<LfsLock> {
+        match self {
+            LockTransport::Http(client) => client.unlock(repo_slug, lock_id, force).await,
+            #[cfg(feature = "iroh")]
+            LockTransport::Iroh { client, addr } => {
+                let record = client
+                    .delete_lock(addr, repo_slug, lock_id, force)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("iroh unlock failed: {}", e))?;
+                Ok(lock_record_to_lfs_lock(record))
+            }
+        }
+    }
+
+    pub async fn list_locks(
+        &self,
+        repo_slug: &str,
+        path: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<(Vec<LfsLock>, Option<String>)> {
+        match self {
+            LockTransport::Http(client) => client.list_locks(repo_slug, path, cursor, limit).await,
+            #[cfg(feature = "iroh")]
+            LockTransport::Iroh { client, addr } => {
+                let (records, next_cursor) = client
+                    .list_locks(addr, repo_slug, cursor, limit)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("iroh list_locks failed: {}", e))?;
+                let locks = records.into_iter().map(lock_record_to_lfs_lock).collect();
+                Ok((locks, next_cursor))
+            }
+        }
+    }
+
+    pub async fn verify_locks(
+        &self,
+        repo_slug: &str,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<(Vec<LfsLock>, Vec<LfsLock>, Option<String>)> {
+        match self {
+            LockTransport::Http(client) => client.verify_locks(repo_slug, cursor, limit).await,
+            #[cfg(feature = "iroh")]
+            LockTransport::Iroh { client, addr } => {
+                let (ours, theirs, next_cursor) = client
+                    .verify_locks(addr, repo_slug, cursor, limit)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("iroh verify_locks failed: {}", e))?;
+                let ours = ours.into_iter().map(lock_record_to_lfs_lock).collect();
+                let theirs = theirs.into_iter().map(lock_record_to_lfs_lock).collect();
+                Ok((ours, theirs, next_cursor))
+            }
+        }
+    }
+}

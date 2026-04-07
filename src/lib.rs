@@ -8,3 +8,4 @@ pub mod transport;
 pub use config::Config;
 pub use daemon::run_daemon;
 pub use error::{BlossomLfsError, Result};
+pub use lock_client::{LockClient, LockTransport};

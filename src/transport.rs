@@ -105,7 +105,6 @@ impl Transport {
         is_manifest: bool,
     ) -> Result<BlobDescriptor> {
         self.client
-            .http()
             .upload_lfs(data, content_type, path, repo, base_sha256, is_manifest)
             .await
             .map_err(BlossomLfsError::Blossom)

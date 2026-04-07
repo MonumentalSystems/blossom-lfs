@@ -22,7 +22,10 @@ const DEFAULT_DAEMON_PORT: u16 = 31921;
 #[derive(Debug, Clone)]
 pub struct Config {
     /// HTTP URL of the Blossom server.
-    pub server_url: String,
+    ///
+    /// Optional when `force_transport = iroh` and `iroh_endpoint` is set
+    /// (iroh-only mode). Required otherwise.
+    pub server_url: Option<String>,
     /// Optional iroh endpoint ID (base32-encoded). When set alongside
     /// `server_url`, the daemon uses iroh for uploads and HTTP for downloads
     /// with automatic fallback.
@@ -162,8 +165,12 @@ impl Config {
             }
         }
 
-        let server_url =
-            server_url.ok_or_else(|| anyhow::anyhow!("Missing server URL in config"))?;
+        let is_iroh_only = force_transport == Some(ForceTransport::Iroh) && iroh_endpoint.is_some();
+        let server_url = if is_iroh_only {
+            server_url
+        } else {
+            Some(server_url.ok_or_else(|| anyhow::anyhow!("Missing server URL in config"))?)
+        };
 
         let private_key_str = private_key_str
             .or_else(|| std::env::var("NOSTR_PRIVATE_KEY").ok())
@@ -184,8 +191,7 @@ impl Config {
     }
 
     fn from_env() -> Result<Self> {
-        let server_url = std::env::var("BLOSSOM_SERVER_URL")
-            .or_else(|_| anyhow::bail!("Missing BLOSSOM_SERVER_URL environment variable"))?;
+        let server_url_env = std::env::var("BLOSSOM_SERVER_URL").ok();
 
         let private_key_str = std::env::var("NOSTR_PRIVATE_KEY")
             .or_else(|_| anyhow::bail!("Missing NOSTR_PRIVATE_KEY environment variable"))?;
@@ -206,6 +212,15 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_DAEMON_PORT);
+
+        let is_iroh_only = force_transport == Some(ForceTransport::Iroh) && iroh_endpoint.is_some();
+        let server_url = if is_iroh_only {
+            server_url_env
+        } else {
+            Some(server_url_env.ok_or_else(|| {
+                anyhow::anyhow!("Missing BLOSSOM_SERVER_URL environment variable")
+            })?)
+        };
 
         Ok(Config {
             server_url,
@@ -254,7 +269,10 @@ mod tests {
              private-key=0000000000000000000000000000000000000000000000000000000000000001",
         )
         .unwrap();
-        assert_eq!(config.server_url, "https://blossom.example.com");
+        assert_eq!(
+            config.server_url,
+            Some("https://blossom.example.com".to_string())
+        );
         assert_eq!(config.iroh_endpoint.as_deref(), Some("abc123def456"));
         assert!(config.force_transport.is_none());
     }
@@ -268,7 +286,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.force_transport, Some(ForceTransport::Iroh));
-        assert_eq!(config.server_url, "https://blossom.example.com");
+        assert_eq!(
+            config.server_url,
+            Some("https://blossom.example.com".to_string())
+        );
     }
 
     #[test]
@@ -281,5 +302,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.force_transport, Some(ForceTransport::Http));
+    }
+
+    #[test]
+    fn test_parse_config_iroh_only_no_server() {
+        let config = Config::parse_config(
+            "iroh-endpoint=abc123\n\
+             transport=iroh\n\
+             private-key=0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        assert_eq!(config.force_transport, Some(ForceTransport::Iroh));
+        assert_eq!(config.iroh_endpoint.as_deref(), Some("abc123"));
+        assert!(config.server_url.is_none());
+    }
+
+    #[test]
+    fn test_parse_config_missing_server_no_iroh() {
+        let result = Config::parse_config(
+            "private-key=0000000000000000000000000000000000000000000000000000000000000001",
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing server URL"));
     }
 }
