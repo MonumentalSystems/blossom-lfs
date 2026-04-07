@@ -9,10 +9,11 @@
 //!
 //! ## Configuration
 //!
+//! In `.lfsdalconfig`:
+//!
 //! ```ini
-//! [lfs-dal]
-//!     server = https://blossom.example.com   # HTTP (default)
-//!     # — or —
+//! server = https://blossom.example.com   # HTTP (default)
+//! # — or —
 //!     server = <iroh-endpoint-id>            # iroh QUIC
 //!     transport = iroh
 //! ```
