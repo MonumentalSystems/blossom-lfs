@@ -185,6 +185,7 @@ enum Operation {
 struct BatchRequest {
     operation: Operation,
     #[serde(default)]
+    #[allow(dead_code)]
     transfers: Vec<String>,
     objects: Vec<BatchObject>,
 }
