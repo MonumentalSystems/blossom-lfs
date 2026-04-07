@@ -14,7 +14,7 @@ default = []
 iroh = ["blossom-rs/iroh-transport", "blossom-rs/pkarr-discovery", "dep:iroh"]
 
 [dependencies]
-blossom-rs = { path = "../blossom-rs", default-features = false, features = ["client"] }
+blossom-rs = { git = "https://github.com/MonumentalSystems/blossom-rs.git", branch = "feature/bud-17-19-lfs-locking", default-features = false, features = ["client"] }
 tokio = { version = "1.39", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"] }
 nostr = "0.35"
 serde = { version = "1.0", features = ["derive"] }
@@ -42,5 +42,5 @@ wiremock = "0.6"
 proptest = "1.5"
 tokio-test = "0.4"
 axum = "0.7"
-blossom-rs = { path = "../blossom-rs", features = ["server"] }
+blossom-rs = { git = "https://github.com/MonumentalSystems/blossom-rs.git", branch = "feature/bud-17-19-lfs-locking", features = ["server"] }
 reqwest = { version = "0.12", features = ["json"] }
