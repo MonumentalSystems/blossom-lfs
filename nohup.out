@@ -1,0 +1,4 @@
+[2m2026-04-08T05:37:31.517265Z[0m [32m INFO[0m [2mblossom_lfs::daemon[0m[2m:[0m blossom-lfs daemon starting [3mdaemon.port[0m[2m=[0m31921
+failed to bind daemon to 127.0.0.1:31921
+[2m2026-04-08T05:38:00.516218Z[0m [32m INFO[0m [2mblossom_lfs::daemon[0m[2m:[0m blossom-lfs daemon starting [3mdaemon.port[0m[2m=[0m31921
+[2m2026-04-08T05:38:00.516413Z[0m [32m INFO[0m [2mblossom_lfs::daemon[0m[2m:[0m blossom-lfs daemon listening [3mdaemon.addr[0m[2m=[0m127.0.0.1:31921

@@ -256,11 +256,11 @@ async fn spawn_lock_server() -> String {
 
     let app = Router::new()
         .route(
-            "/lfs/:repo_id/locks",
+            "/lfs/{repo_id}/locks",
             post(handle_create_lock).get(handle_list_locks),
         )
-        .route("/lfs/:repo_id/locks/verify", post(handle_verify_locks))
-        .route("/lfs/:repo_id/locks/:lock_id/unlock", post(handle_unlock))
+        .route("/lfs/{repo_id}/locks/verify", post(handle_verify_locks))
+        .route("/lfs/{repo_id}/locks/{lock_id}/unlock", post(handle_unlock))
         .with_state(store);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

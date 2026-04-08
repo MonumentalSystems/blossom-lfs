@@ -105,8 +105,8 @@ async fn spawn_blossom_server() -> (String, SharedStore) {
 
     let app = Router::new()
         .route("/upload", put(blossom_put_upload))
-        .route("/:sha256", get(blossom_get_blob))
-        .route("/:sha256", axum::routing::head(blossom_head_blob))
+        .route("/{sha256}", get(blossom_get_blob))
+        .route("/{sha256}", axum::routing::head(blossom_head_blob))
         .with_state(store.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
