@@ -313,8 +313,7 @@ fn install_launchd_service(daemon_port: u16, exe: &str) -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&plist_dir)
         .map_err(|e| anyhow::anyhow!("create LaunchAgents dir: {}", e))?;
-    std::fs::write(&plist_path, &plist)
-        .map_err(|e| anyhow::anyhow!("write plist: {}", e))?;
+    std::fs::write(&plist_path, &plist).map_err(|e| anyhow::anyhow!("write plist: {}", e))?;
 
     // Get UID for launchctl domain target
     let uid = std::process::Command::new("id")
@@ -374,8 +373,7 @@ WantedBy=default.target
 
     std::fs::create_dir_all(&unit_dir)
         .map_err(|e| anyhow::anyhow!("create systemd user dir: {}", e))?;
-    std::fs::write(&unit_path, &unit)
-        .map_err(|e| anyhow::anyhow!("write service file: {}", e))?;
+    std::fs::write(&unit_path, &unit).map_err(|e| anyhow::anyhow!("write service file: {}", e))?;
 
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
