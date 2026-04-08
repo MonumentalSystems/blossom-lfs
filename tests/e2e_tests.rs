@@ -117,8 +117,8 @@ pub async fn create_test_server() -> (String, SharedBlobStore) {
 
     let app = Router::new()
         .route("/upload", put(upload_blob))
-        .route("/:path", get(get_blob_handler))
-        .route("/:path", head(head_blob_handler))
+        .route("/{path}", get(get_blob_handler))
+        .route("/{path}", head(head_blob_handler))
         .with_state(store.clone());
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
@@ -130,7 +130,7 @@ pub async fn create_test_server() -> (String, SharedBlobStore) {
     });
 
     // Give server time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     (format!("http://127.0.0.1:{}", port), store)
 }

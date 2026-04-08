@@ -57,7 +57,7 @@ async fn spawn_blossom_server() -> String {
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     url
 }
 
@@ -79,13 +79,13 @@ async fn spawn_blossom_server_with_locks(signer: &Signer) -> String {
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     url
 }
 
 async fn spawn_lfs_daemon(port: u16) {
     tokio::spawn(blossom_lfs::daemon::run_daemon(port));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 }
 
 async fn find_port() -> u16 {
