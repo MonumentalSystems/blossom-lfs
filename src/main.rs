@@ -44,6 +44,8 @@ enum Commands {
         #[arg(long, default_value = "31921")]
         port: u16,
     },
+    /// Remove the daemon background service (launchd on macOS, systemd on Linux).
+    Uninstall,
     /// Clone a repository and configure git-lfs to use the blossom-lfs daemon.
     ///
     /// All arguments are passed directly to `git clone`. Supports the same
@@ -75,6 +77,7 @@ async fn run() -> anyhow::Result<()> {
         }
         Commands::Setup => setup_repo(None),
         Commands::Install { service, port } => install(service, port),
+        Commands::Uninstall => uninstall_service(),
         Commands::Clone { args } => clone_repo(&args),
     }
 }
@@ -396,6 +399,59 @@ WantedBy=default.target
 
 #[cfg(not(target_os = "linux"))]
 fn install_systemd_service(_daemon_port: u16, _exe: &str) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn uninstall_service() -> anyhow::Result<()> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+        let plist_path = format!(
+            "{}/Library/LaunchAgents/com.monumentalsystems.blossom-lfs.plist",
+            home
+        );
+
+        if !std::path::Path::new(&plist_path).exists() {
+            anyhow::bail!("service not installed (no plist at {})", plist_path);
+        }
+
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", &plist_path])
+            .status();
+
+        std::fs::remove_file(&plist_path)
+            .map_err(|e| anyhow::anyhow!("failed to remove plist: {}", e))?;
+
+        eprintln!("[ok] launchd service stopped and removed");
+        eprintln!("     removed: {}", plist_path);
+    } else if cfg!(target_os = "linux") {
+        let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+        let unit_path = format!("{}/.config/systemd/user/blossom-lfs.service", home);
+
+        if !std::path::Path::new(&unit_path).exists() {
+            anyhow::bail!("service not installed (no unit at {})", unit_path);
+        }
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "stop", "blossom-lfs.service"])
+            .status();
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "blossom-lfs.service"])
+            .status();
+
+        std::fs::remove_file(&unit_path)
+            .map_err(|e| anyhow::anyhow!("failed to remove unit file: {}", e))?;
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+
+        eprintln!("[ok] systemd service stopped, disabled, and removed");
+        eprintln!("     removed: {}", unit_path);
+    } else {
+        anyhow::bail!("service uninstall not supported on this platform");
+    }
+
     Ok(())
 }
 
