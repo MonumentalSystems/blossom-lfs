@@ -1,6 +1,6 @@
 [package]
 name = "blossom-lfs"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Git LFS daemon for Blossom blob storage with chunking and lock support"
 license = "MIT"
@@ -14,7 +14,7 @@ default = []
 iroh = ["blossom-rs/iroh-transport", "blossom-rs/pkarr-discovery", "dep:iroh"]
 
 [dependencies]
-blossom-rs = { git = "https://github.com/MonumentalSystems/blossom-rs.git", tag = "v0.4.1", default-features = false, features = ["client"] }
+blossom-rs = { version = "0.4.1", default-features = false, features = ["client"] }
 tokio = { version = "1.39", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"] }
 nostr = "0.35"
 serde = { version = "1.0", features = ["derive"] }
@@ -42,5 +42,5 @@ wiremock = "0.6"
 proptest = "1.5"
 tokio-test = "0.4"
 axum = "0.7"
-blossom-rs = { git = "https://github.com/MonumentalSystems/blossom-rs.git", tag = "v0.4.1", features = ["server"] }
+blossom-rs = { version = "0.4.1", features = ["server"] }
 reqwest = { version = "0.12", features = ["json"] }
