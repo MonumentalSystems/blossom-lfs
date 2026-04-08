@@ -1,6 +1,6 @@
 [package]
 name = "blossom-lfs"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Git LFS daemon for Blossom blob storage with chunking and lock support"
 license = "MIT"
