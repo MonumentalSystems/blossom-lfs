@@ -112,13 +112,13 @@ async fn spawn_blossom_server() -> (String, SharedStore) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     (format!("http://127.0.0.1:{}", port), store)
 }
 
 async fn spawn_lfs_daemon(port: u16) {
     tokio::spawn(blossom_lfs::daemon::run_daemon(port));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 }
 
 fn make_config_content(server_url: &str, nsec_hex: &str) -> String {

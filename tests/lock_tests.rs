@@ -267,7 +267,7 @@ async fn spawn_lock_server() -> String {
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     url
 }
 

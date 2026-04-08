@@ -59,7 +59,7 @@ async fn spawn_blossom_server_with_access(admin_signer: &Signer, member_signer: 
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     url
 }
 
@@ -70,7 +70,7 @@ async fn find_port() -> u16 {
 
 async fn spawn_lfs_daemon(port: u16) {
     tokio::spawn(blossom_lfs::daemon::run_daemon(port));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 }
 
 /// User A locks a file, User B tries to lock the same file → 409 conflict.

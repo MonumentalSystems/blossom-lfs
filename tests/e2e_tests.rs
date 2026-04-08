@@ -130,7 +130,7 @@ pub async fn create_test_server() -> (String, SharedBlobStore) {
     });
 
     // Give server time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     (format!("http://127.0.0.1:{}", port), store)
 }

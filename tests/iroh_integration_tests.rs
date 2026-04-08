@@ -118,7 +118,7 @@ async fn test_dual_transport_iroh_upload_http_download() {
     let http_addr = http_listener.local_addr().unwrap();
     let http_url = format!("http://{}", http_addr);
     tokio::spawn(async move { axum::serve(http_listener, app).await.ok() });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let iroh_server =
         BlobServer::builder(SharedBackend::new(shared_mem.clone()), "iroh://test").build();
