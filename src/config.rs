@@ -26,7 +26,10 @@ const DEFAULT_DAEMON_PORT: u16 = 31921;
 pub struct Config {
     pub server_url: Option<String>,
     pub iroh_endpoint: Option<String>,
-    pub secret_key_hex: String,
+    /// Nostr private key as a 64-character hex string.
+    /// Optional — only needed for uploads, locks, and other signed operations.
+    /// Downloads are public and don't require a key.
+    pub secret_key_hex: Option<String>,
     pub chunk_size: usize,
     pub max_concurrent_uploads: usize,
     pub max_concurrent_downloads: usize,
@@ -156,13 +159,10 @@ impl ConfigFields {
             )
         };
 
-        let private_key_str = self.private_key_str.ok_or_else(|| {
-            anyhow::anyhow!(
-                "Missing private key — set in .lfsdalconfig, .git/config, or NOSTR_PRIVATE_KEY env"
-            )
-        })?;
-
-        let secret_key_hex = normalize_to_hex(&private_key_str)?;
+        let secret_key_hex = self
+            .private_key_str
+            .map(|k| normalize_to_hex(&k))
+            .transpose()?;
 
         Ok(Config {
             server_url,
@@ -349,9 +349,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_config_missing_key() {
-        let result = parse("server=https://blossom.example.com");
-        assert!(result.is_err());
+    fn test_parse_config_missing_key_is_ok() {
+        // Key is optional — downloads don't need it
+        let config = parse("server=https://blossom.example.com").unwrap();
+        assert!(config.secret_key_hex.is_none());
     }
 
     #[test]
@@ -416,8 +417,8 @@ mod tests {
         let config = Config::from_repo_path(dir.path()).unwrap();
         assert_eq!(config.server_url, Some("https://example.com".to_string()));
         assert_eq!(
-            config.secret_key_hex,
-            "0000000000000000000000000000000000000000000000000000000000000001"
+            config.secret_key_hex.as_deref(),
+            Some("0000000000000000000000000000000000000000000000000000000000000001")
         );
     }
 

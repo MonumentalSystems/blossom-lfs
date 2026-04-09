@@ -142,6 +142,39 @@ pub fn clone_repo(args: &[String]) -> anyhow::Result<()> {
     tracing::info!(path = %target_dir.display(), "configuring blossom-lfs");
     setup_repo(Some(&target_dir))?;
 
+    // Checkout the default branch — clone may leave HEAD on a nonexistent
+    // ref (e.g., 'master') when the actual branch is 'main'.
+    // Find the first remote branch and check it out properly.
+    let branch_output = std::process::Command::new("git")
+        .args(["branch", "-r", "--format=%(refname:short)"])
+        .current_dir(&target_dir)
+        .output()
+        .ok();
+    if let Some(output) = branch_output {
+        let branches = String::from_utf8_lossy(&output.stdout);
+        if let Some(branch) = branches
+            .lines()
+            .find(|b| !b.contains("HEAD"))
+            .or_else(|| branches.lines().next())
+        {
+            let local = branch.strip_prefix("origin/").unwrap_or(branch);
+            let checkout = std::process::Command::new("git")
+                .args(["checkout", "-f", "-B", local, branch])
+                .current_dir(&target_dir)
+                .env("GIT_LFS_SKIP_SMUDGE", "1")
+                .output();
+            if let Ok(out) = &checkout {
+                if !out.status.success() {
+                    tracing::warn!(
+                        branch = local,
+                        stderr = %String::from_utf8_lossy(&out.stderr),
+                        "failed to checkout branch"
+                    );
+                }
+            }
+        }
+    }
+
     // Pull LFS objects through daemon
     tracing::info!("pulling LFS objects through blossom-lfs daemon");
     let status = std::process::Command::new("git")

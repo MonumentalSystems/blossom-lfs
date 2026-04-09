@@ -84,8 +84,12 @@ fn decode_repo_path(repo_b64: &str) -> Result<PathBuf> {
 }
 
 async fn make_transport(config: &Config) -> Result<Transport> {
-    let signer = Signer::from_secret_hex(&config.secret_key_hex)
-        .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
+    let key = config
+        .secret_key_hex
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("private key required for this operation — set in .lfsdalconfig, .git/config, or NOSTR_PRIVATE_KEY env"))?;
+    let signer =
+        Signer::from_secret_hex(key).map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
 
     let server_url = config
         .server_url
@@ -147,9 +151,32 @@ fn load_config(repo_path: &std::path::Path) -> Result<Config> {
     Config::from_repo_path(repo_path)
 }
 
+#[allow(dead_code)] // Retained for future protected/authenticated downloads
 async fn load_transport(repo_path: &std::path::Path) -> Result<Transport> {
     let config = load_config(repo_path)?;
     make_transport(&config).await
+}
+
+/// Load transport for read-only operations (downloads).
+/// Uses a dummy signer if no private key is configured — downloads
+/// don't require authentication on Blossom servers.
+async fn load_read_transport(repo_path: &std::path::Path) -> Result<Transport> {
+    let config = load_config(repo_path)?;
+    if config.secret_key_hex.is_some() {
+        make_transport(&config).await
+    } else {
+        let server_url = config
+            .server_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:0".to_string());
+        // Generate a throwaway signer for download-only transport
+        let signer = Signer::generate();
+        Ok(Transport::http_only(
+            server_url,
+            signer,
+            std::time::Duration::from_secs(300),
+        ))
+    }
 }
 
 async fn load_client(repo_path: &std::path::Path) -> Result<(Config, String, LockTransport)> {
@@ -192,9 +219,13 @@ async fn make_lock_transport(config: &Config) -> Result<LockTransport> {
         .server_url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No server URL configured and iroh not enabled"))?;
+    let key = config
+        .secret_key_hex
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("private key required for lock operations"))?;
     Ok(LockTransport::Http(LockClient::new(
         server_url.clone(),
-        config.secret_key_hex.clone(),
+        key,
     )))
 }
 
@@ -411,7 +442,7 @@ async fn handle_download(
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()).into_response(),
     };
 
-    let transport = match load_transport(&repo_path).await {
+    let transport = match load_read_transport(&repo_path).await {
         Ok(t) => t,
         Err(e) => {
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
@@ -679,7 +710,7 @@ async fn handle_verify(
         Err(e) => return error_response(StatusCode::BAD_REQUEST, &e.to_string()),
     };
 
-    let transport = match load_transport(&repo_path).await {
+    let transport = match load_read_transport(&repo_path).await {
         Ok(t) => t,
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
