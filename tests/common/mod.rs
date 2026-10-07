@@ -32,7 +32,7 @@ mod mock_server {
 
         pub fn insert(&mut self, data: Vec<u8>) -> MockBlobDescriptor {
             use sha2::{Digest, Sha256};
-            let hash = format!("{:x}", Sha256::digest(&data));
+            let hash = hex::encode(Sha256::digest(&data));
             let size = data.len() as u64;
             let url = format!("/{}", hash);
             let ts = std::time::SystemTime::now()

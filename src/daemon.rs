@@ -193,8 +193,13 @@ async fn make_lock_transport(config: &Config) -> Result<LockTransport> {
     if use_iroh {
         #[cfg(feature = "iroh")]
         {
-            let signer = Signer::from_secret_hex(&config.secret_key_hex)
-                .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
+            let signer = Signer::from_secret_hex(
+                config
+                    .secret_key_hex
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("private key required for lock operations"))?,
+            )
+            .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
             let endpoint = iroh::Endpoint::bind(iroh::endpoint::presets::N0)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to create iroh endpoint: {}", e))?;

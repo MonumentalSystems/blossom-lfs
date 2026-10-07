@@ -1,4 +1,4 @@
-//! Transport layer wrapping blossom-rs [`MultiTransportClient`].
+//! Transport layer wrapping blossom-rs [`blossom_rs::MultiTransportClient`].
 //!
 //! When both HTTP and iroh endpoints are configured, the daemon uses iroh for
 //! uploads (direct P2P) and HTTP for downloads (CDN caching), with automatic
@@ -9,9 +9,11 @@
 //! In `.lfsdalconfig`:
 //!
 //! ```ini
-//! server = https://blossom.example.com       # HTTP (required)
-//! iroh-endpoint = <iroh-endpoint-id>          # iroh QUIC (optional)
-//! # transport = http                          # force HTTP for all ops (optional)
+//! server = https://blossom.example.com
+//! # Optional iroh endpoint; requires the iroh feature.
+//! # iroh-endpoint = <iroh-endpoint-id>
+//! # Force HTTP for all operations:
+//! # transport = http
 //! ```
 
 use crate::error::{BlossomLfsError, Result};

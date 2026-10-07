@@ -31,7 +31,7 @@ impl BlobStore {
     }
 
     fn store(&mut self, data: Vec<u8>, content_type: &str) -> StoredBlob {
-        let hash = format!("{:x}", Sha256::digest(&data));
+        let hash = hex::encode(Sha256::digest(&data));
         let blob = StoredBlob {
             sha256: hash.clone(),
             data,
@@ -160,7 +160,7 @@ async fn find_port() -> u16 {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
+    hex::encode(Sha256::digest(data))
 }
 
 #[tokio::test(flavor = "multi_thread")]

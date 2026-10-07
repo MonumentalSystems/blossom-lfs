@@ -16,7 +16,7 @@ async fn test_blossom_client_upload() {
     let client = create_test_client(mock_server.uri());
 
     let data = b"hello world";
-    let hash = format!("{:x}", Sha256::digest(data));
+    let hash = hex::encode(Sha256::digest(data));
 
     Mock::given(method("PUT"))
         .and(path("/upload"))
@@ -43,7 +43,7 @@ async fn test_blossom_client_download() {
     let client = create_test_client(mock_server.uri());
 
     let test_data = b"test blob content";
-    let hash = format!("{:x}", Sha256::digest(test_data));
+    let hash = hex::encode(Sha256::digest(test_data));
 
     Mock::given(method("GET"))
         .and(path(format!("/{}", hash)))

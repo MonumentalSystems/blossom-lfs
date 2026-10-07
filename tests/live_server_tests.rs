@@ -37,8 +37,8 @@ fn live_client() -> BlossomClient {
 
     // Normalise nsec → hex if needed
     let hex_key = if nsec.starts_with("nsec1") {
-        let sk = nostr::SecretKey::parse(&nsec).expect("invalid BLOSSOM_TEST_NSEC");
-        hex::encode(sk.secret_bytes())
+        let sk = nostr::key::SecretKey::parse(&nsec).expect("invalid BLOSSOM_TEST_NSEC");
+        hex::encode(sk.to_secret_bytes())
     } else {
         nsec
     };
@@ -65,7 +65,7 @@ fn test_payload(tag: &str) -> Vec<u8> {
 async fn live_upload_and_download() {
     let client = live_client();
     let data = test_payload("upload_download");
-    let expected_hash = format!("{:x}", Sha256::digest(&data));
+    let expected_hash = hex::encode(Sha256::digest(&data));
 
     // Upload
     let descriptor = client
@@ -96,7 +96,7 @@ async fn live_upload_and_download() {
 async fn live_exists_check() {
     let client = live_client();
     let data = test_payload("exists_check");
-    let expected_hash = format!("{:x}", Sha256::digest(&data));
+    let expected_hash = hex::encode(Sha256::digest(&data));
 
     // Should not exist yet (unique payload)
     let before = client.exists(&expected_hash).await.unwrap_or(false);
@@ -131,7 +131,7 @@ async fn live_exists_check() {
 async fn live_dedup_skips_existing() {
     let client = live_client();
     let data = test_payload("dedup");
-    let expected_hash = format!("{:x}", Sha256::digest(&data));
+    let expected_hash = hex::encode(Sha256::digest(&data));
 
     // Upload once
     client
