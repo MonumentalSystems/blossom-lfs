@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 fn sha256_hex(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
+    hex::encode(Sha256::digest(data))
 }
 
 fn repo_b64(repo_path: &std::path::Path) -> String {
@@ -109,14 +109,13 @@ impl BlobBackend for SharedBackend {
 async fn test_dual_transport_iroh_upload_http_download() {
     let shared_mem: Arc<std::sync::Mutex<MemoryBackend>> =
         Arc::new(std::sync::Mutex::new(MemoryBackend::new()));
-    let http_server =
-        BlobServer::builder(SharedBackend::new(shared_mem.clone()), "http://localhost:0")
-            .database(MemoryDatabase::new())
-            .build();
-    let app = http_server.router();
     let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let http_addr = http_listener.local_addr().unwrap();
     let http_url = format!("http://{}", http_addr);
+    let http_server = BlobServer::builder(SharedBackend::new(shared_mem.clone()), &http_url)
+        .database(MemoryDatabase::new())
+        .build();
+    let app = http_server.router();
     tokio::spawn(async move { axum::serve(http_listener, app).await.ok() });
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -129,7 +128,10 @@ async fn test_dual_transport_iroh_upload_http_download() {
         .expect("bind iroh endpoint");
     let iroh_addr = iroh_endpoint.addr();
     let _iroh_router = Router::builder(iroh_endpoint)
-        .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(iroh_state)))
+        .accept(
+            BLOSSOM_ALPN,
+            Arc::new(BlossomProtocol::new(iroh_state, iroh_addr.id)),
+        )
         .spawn();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -256,7 +258,7 @@ async fn spawn_iroh_lfs_server() -> (iroh::EndpointAddr, Router) {
     let addr = endpoint.addr();
 
     let router = Router::builder(endpoint)
-        .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(state)))
+        .accept(BLOSSOM_ALPN, Arc::new(BlossomProtocol::new(state, addr.id)))
         .spawn();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -509,9 +511,9 @@ async fn test_iroh_multiple_blobs() {
     }
 }
 
-/// User A creates a lock. User B cannot unlock (403), but can force-unlock.
+/// A non-owner cannot unlock another user's lock, even with force=true.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_iroh_lock_force_unlock_by_other_user() {
+async fn test_iroh_lock_rejects_force_unlock_by_non_admin() {
     let (server_addr, _router) = spawn_iroh_lfs_server().await;
     let signer_a = Signer::generate();
     let signer_b = Signer::generate();
@@ -558,7 +560,7 @@ async fn test_iroh_lock_force_unlock_by_other_user() {
         "user B unlock without force should be forbidden"
     );
 
-    // User B force-unlocks — should succeed
+    // User B is not an admin; force must not bypass ownership.
     let resp = http
         .post(format!(
             "{}/lfs/{}/locks/{}/unlock",
@@ -568,7 +570,18 @@ async fn test_iroh_lock_force_unlock_by_other_user() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "user B force unlock should succeed");
+    assert_eq!(resp.status(), 403, "non-admin force unlock is forbidden");
+
+    // The owner can still unlock normally.
+    let resp = http
+        .post(format!(
+            "{}/lfs/{}/locks/{}/unlock",
+            daemon_url, repo_b64_a, lock_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "owner unlock should succeed");
 
     // Verify lock is gone
     let resp = http
@@ -580,6 +593,6 @@ async fn test_iroh_lock_force_unlock_by_other_user() {
     let locks: serde_json::Value = resp.json().await.unwrap();
     assert!(
         locks["locks"].as_array().unwrap().is_empty(),
-        "lock should be gone after force unlock"
+        "lock should be gone after owner unlock"
     );
 }

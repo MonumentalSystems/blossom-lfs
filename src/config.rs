@@ -238,9 +238,9 @@ fn normalize_to_hex(key: &str) -> Result<String> {
     let key = key.trim();
 
     if key.starts_with("nsec1") {
-        let secret_key = nostr::SecretKey::parse(key)
+        let secret_key = nostr::key::SecretKey::parse(key)
             .map_err(|e| anyhow::anyhow!("Failed to parse nsec: {}", e))?;
-        Ok(hex::encode(secret_key.secret_bytes()))
+        Ok(hex::encode(secret_key.to_secret_bytes()))
     } else {
         let bytes = hex::decode(key).map_err(|e| anyhow::anyhow!("Failed to decode hex: {}", e))?;
         if bytes.len() != 32 {
@@ -426,6 +426,23 @@ mod tests {
     fn test_normalize_hex_key() {
         let hex = "0000000000000000000000000000000000000000000000000000000000000001";
         assert_eq!(normalize_to_hex(hex).unwrap(), hex);
+    }
+
+    #[test]
+    fn test_normalize_nsec_key() {
+        use nostr::nips::nip19::ToBech32;
+
+        let hex = "0000000000000000000000000000000000000000000000000000000000000001";
+        let nsec = nostr::key::SecretKey::parse(hex)
+            .unwrap()
+            .to_bech32()
+            .unwrap();
+        assert_eq!(normalize_to_hex(&nsec).unwrap(), hex);
+    }
+
+    #[test]
+    fn test_normalize_invalid_nsec() {
+        assert!(normalize_to_hex("nsec1invalid").is_err());
     }
 
     #[test]

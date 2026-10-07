@@ -13,11 +13,11 @@ const CHUNK_SIZE: usize = 4096; // 4 KB
 
 /// Spin up a real blossom-rs server backed by in-memory storage.
 async fn spawn_test_server() -> String {
-    let server = BlobServer::new(MemoryBackend::new(), "http://localhost:0");
-    let app = server.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
+    let server = BlobServer::new(MemoryBackend::new(), &url);
+    let app = server.router();
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     url
@@ -196,7 +196,7 @@ async fn test_full_roundtrip_chunked_upload_download_reassemble() {
         );
 
         // Verify chunk hash
-        let actual_hash = format!("{:x}", Sha256::digest(&chunk_data));
+        let actual_hash = hex::encode(Sha256::digest(&chunk_data));
         assert_eq!(
             actual_hash, chunk_info.hash,
             "chunk {} hash mismatch",
@@ -272,7 +272,7 @@ async fn test_single_chunk_file_no_chunking_needed() {
 
     // Upload as single blob
     let data = tokio::fs::read(file.path()).await.unwrap();
-    let hash = format!("{:x}", Sha256::digest(&data));
+    let hash = hex::encode(Sha256::digest(&data));
     let desc = client
         .upload(&data, "application/octet-stream")
         .await
@@ -292,7 +292,7 @@ async fn test_streaming_upload_file() {
     // Create a file and upload via upload_file (streaming, not buffered)
     let file = create_test_file(16_000);
     let original_data = tokio::fs::read(file.path()).await.unwrap();
-    let expected_hash = format!("{:x}", Sha256::digest(&original_data));
+    let expected_hash = hex::encode(Sha256::digest(&original_data));
 
     use blossom_rs::BlobClient;
     let desc = BlobClient::upload_file(&client, &(), file.path(), "application/octet-stream")

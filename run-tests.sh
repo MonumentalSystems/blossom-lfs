@@ -21,7 +21,7 @@ echo -e "${GREEN}  OK${NC}"
 
 echo ""
 echo -e "${YELLOW}[2/5] Clippy (-D warnings)...${NC}"
-cargo clippy -- -D warnings 2>&1
+cargo clippy --locked --all-targets -- -D warnings 2>&1
 echo -e "${GREEN}  OK${NC}"
 
 echo ""

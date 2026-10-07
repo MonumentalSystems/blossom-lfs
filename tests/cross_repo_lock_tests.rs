@@ -51,7 +51,10 @@ async fn spawn_blossom_server_with_locks(signer: &Signer) -> String {
     let mut members = HashSet::new();
     members.insert(signer.public_key_hex());
 
-    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    let server = BlobServer::builder(MemoryBackend::new(), &url)
         .database(MemoryDatabase::new())
         .access_control(RoleBasedAccess::new(admins, members))
         .require_auth()
@@ -59,9 +62,6 @@ async fn spawn_blossom_server_with_locks(signer: &Signer) -> String {
         .build();
 
     let app = server.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     url

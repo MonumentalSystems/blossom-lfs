@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result};
-use blossom_rs::auth::{auth_header_value, build_blossom_auth, Signer};
+use blossom_rs::auth::{auth_header_value, build_blossom_auth_for_request, Signer};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,15 +64,25 @@ impl LockClient {
     pub fn new(server_url: String, secret_key_hex: String) -> Self {
         Self {
             http: reqwest::Client::new(),
-            server_url,
+            server_url: server_url.trim_end_matches('/').to_string(),
             secret_key_hex,
         }
     }
 
-    fn auth_header(&self, action: &str) -> Result<String> {
+    fn auth_header(&self, repo_slug: &str, suffix: &str, method: &str) -> Result<String> {
         let signer = Signer::from_secret_hex(&self.secret_key_hex)
             .map_err(|e| anyhow::anyhow!("invalid secret key: {}", e))?;
-        let event = build_blossom_auth(&signer, action, None, None, "");
+        // blossom-rs binds lock auth to the decoded route, excluding query parameters.
+        let request_url = format!("{}/lfs/{}/locks{}", self.server_url, repo_slug, suffix);
+        let event = build_blossom_auth_for_request(
+            &signer,
+            "lock",
+            None,
+            &self.server_url,
+            &request_url,
+            method,
+            "",
+        );
         Ok(auth_header_value(&event))
     }
 
@@ -82,7 +92,7 @@ impl LockClient {
             self.server_url,
             urlencoding::encode(repo_slug)
         );
-        let auth = self.auth_header("lock")?;
+        let auth = self.auth_header(repo_slug, "", "POST")?;
 
         let resp = self
             .http
@@ -119,7 +129,7 @@ impl LockClient {
             urlencoding::encode(repo_slug),
             lock_id
         );
-        let auth = self.auth_header("lock")?;
+        let auth = self.auth_header(repo_slug, &format!("/{lock_id}/unlock"), "POST")?;
 
         let resp = self
             .http
@@ -170,7 +180,7 @@ impl LockClient {
             url.push_str(&params.join("&"));
         }
 
-        let auth = self.auth_header("lock")?;
+        let auth = self.auth_header(repo_slug, "", "GET")?;
 
         let resp = self
             .http
@@ -204,7 +214,7 @@ impl LockClient {
             self.server_url,
             urlencoding::encode(repo_slug)
         );
-        let auth = self.auth_header("lock")?;
+        let auth = self.auth_header(repo_slug, "/verify", "POST")?;
 
         let resp = self
             .http

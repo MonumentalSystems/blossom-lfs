@@ -47,7 +47,10 @@ async fn spawn_blossom_server_with_access(admin_signer: &Signer, member_signer: 
     let mut members = HashSet::new();
     members.insert(member_signer.public_key_hex());
 
-    let server = BlobServer::builder(MemoryBackend::new(), "http://localhost:3000")
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+    let server = BlobServer::builder(MemoryBackend::new(), &url)
         .database(MemoryDatabase::new())
         .access_control(RoleBasedAccess::new(admins, members))
         .require_auth()
@@ -55,9 +58,6 @@ async fn spawn_blossom_server_with_access(admin_signer: &Signer, member_signer: 
         .build();
 
     let app = server.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let url = format!("http://{}", addr);
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     url
@@ -69,8 +69,24 @@ async fn find_port() -> u16 {
 }
 
 async fn spawn_lfs_daemon(port: u16) {
-    tokio::spawn(blossom_lfs::daemon::run_daemon(port));
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let task = tokio::spawn(blossom_lfs::daemon::run_daemon(port));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            assert!(
+                !task.is_finished(),
+                "LFS daemon exited before becoming ready"
+            );
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("LFS daemon did not become ready");
 }
 
 /// User A locks a file, User B tries to lock the same file → 409 conflict.
@@ -257,7 +273,7 @@ async fn test_admin_force_unlock() {
     let admin_repo = setup_git_repo(&blossom_url, &admin.secret_key_hex());
     let admin_b64 = repo_b64(admin_repo.path());
 
-    // Admin forces unlock (admin role means force=true is implicit on server side)
+    // Admin privileges alone do not force an unlock; the request must opt in.
     let resp = http
         .post(format!(
             "{}/lfs/{}/locks/{}/unlock",
@@ -267,11 +283,18 @@ async fn test_admin_force_unlock() {
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        200,
-        "admin should be able to force-unlock any lock"
-    );
+    assert_eq!(resp.status(), 403, "force must be explicitly requested");
+
+    let resp = http
+        .post(format!(
+            "{}/lfs/{}/locks/{}/unlock",
+            daemon_url, admin_b64, lock_id
+        ))
+        .json(&serde_json::json!({"force": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "admin can explicitly force an unlock");
 
     // Verify lock removed
     let resp = http

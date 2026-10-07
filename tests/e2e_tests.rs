@@ -36,7 +36,7 @@ impl BlobStore {
     }
 
     pub fn insert(&mut self, data: Vec<u8>) -> BlobDescriptor {
-        let hash = format!("{:x}", Sha256::digest(&data));
+        let hash = hex::encode(Sha256::digest(&data));
         let size = data.len() as u64;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

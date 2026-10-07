@@ -21,7 +21,7 @@ install: release
 	cargo install --path .
 
 check:
-	cargo clippy -- -D warnings
+	cargo clippy --locked --all-targets -- -D warnings
 	cargo fmt -- --check
 	@echo "Code quality checks passed"
 
